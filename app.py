@@ -359,9 +359,8 @@ async def generate(req: Request):
                 {"role": "user", "content": user_prompt}
             ],
             response_format={"type": "json_object"},
-            extra_body={"thinking": {"type": "enabled"}},
-            reasoning_effort="high",
-            max_tokens=4096,
+                        extra_body={"thinking": {"type": "enabled"}},
+                        max_tokens=4096,
         )
         raw_content = response.choices[0].message.content.strip()
         # 尝试解析JSON
