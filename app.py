@@ -1,8 +1,6 @@
 import os
 import json
 import hashlib
-import threading
-from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 import openai
@@ -10,904 +8,1184 @@ import uvicorn
 
 app = FastAPI()
 
-# 初始化 OpenAI 客户端（DeepSeek 兼容）
 client = openai.OpenAI(
     api_key=os.getenv("DEEPSEEK_API_KEY"),
     base_url="https://api.deepseek.com/v1",
 )
 
-# 缓存字典：key -> html_content
-cache = {}
+_cache: dict = {}
 
-HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="zh-CN">
+# ---------------------------------------------------------------------------
+# HTML TEMPLATE
+# ---------------------------------------------------------------------------
+HTML_TEMPLATE = """<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>递归学习队列</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Syne:wght@500;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-    <style>
-        :root {
-            --black:   #0c0c0e;
-            --dark:    #141418;
-            --mid:     #1e1e26;
-            --border:  #2a2a35;
-            --muted:   #4a4a5e;
-            --subtle:  #6b6b82;
-            --white:   #f0f0f5;
-            --dim:     #a0a0b8;
-            --blue:    #2563eb;
-            --blue-hi: #3b82f6;
-            --blue-lo: #1d4ed8;
-            --blue-bg: #0f1b38;
-            --blue-dim: #1e2d55;
-        }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>递归学习</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ═══════════════════════════════════════
+   TOKENS
+═══════════════════════════════════════ */
+:root {
+  --bg:       #0f0f0e;
+  --surface:  #181817;
+  --raised:   #222221;
+  --bd:       #2d2d2b;
+  --bd-hi:    #444442;
+  --t1:       #e8e7e2;
+  --t2:       #8a897f;
+  --t3:       #4e4d47;
+  --acc:      #2c62d4;
+  --acc-bg:   #111d3a;
+  --acc-bd:   #1e3166;
+  --grn:      #1fa84a;
+  --grn-bg:   #091a0f;
+  --amb:      #c97a1a;
+  --amb-bg:   #1c1206;
+  --red:      #c93838;
+  --red-bg:   #1c0808;
+  --font-ui:  "IBM Plex Mono", monospace;
+  --font-body:"IBM Plex Sans", system-ui, sans-serif;
+  --font-head:"Barlow Condensed", sans-serif;
+}
+[data-theme="light"] {
+  --bg:       #f2f1ec;
+  --surface:  #e6e5df;
+  --raised:   #fafaf7;
+  --bd:       #ccc9be;
+  --bd-hi:    #aaa89e;
+  --t1:       #111110;
+  --t2:       #55544e;
+  --t3:       #99978f;
+  --acc:      #1a4db5;
+  --acc-bg:   #dbe8fe;
+  --acc-bd:   #93b4fd;
+  --grn:      #15803d;
+  --grn-bg:   #f0fdf4;
+  --amb:      #92400e;
+  --amb-bg:   #fffbeb;
+  --red:      #b91c1c;
+  --red-bg:   #fef2f2;
+}
 
-        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+*,*::before,*::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--t1);
+  font-family: var(--font-body);
+  font-size: 14px;
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
 
-        body {
-            background: var(--black);
-            color: var(--white);
-            font-family: 'Inter', sans-serif;
-            height: 100vh;
-            overflow: hidden;
-        }
+/* ═══════════════════════════════════════
+   SIDEBAR
+═══════════════════════════════════════ */
+#sidebar {
+  width: 272px;
+  flex-shrink: 0;
+  background: var(--surface);
+  border-right: 1px solid var(--bd);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
 
-        /* ── Layout ── */
-        .app-shell {
-            display: flex;
-            height: 100vh;
-        }
+/* -- header -- */
+.sb-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 13px 14px;
+  border-bottom: 1px solid var(--bd);
+  flex-shrink: 0;
+}
+.brand {
+  font-family: var(--font-head);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--t1);
+}
+.brand em { color: var(--acc); font-style: normal; }
 
-        /* ── Left: Learning Area ── */
-        #learning-area {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-            border-right: 1px solid var(--border);
-        }
+#theme-btn {
+  font-family: var(--font-ui);
+  font-size: 10px;
+  letter-spacing: .06em;
+  background: none;
+  border: 1px solid var(--bd);
+  border-radius: 1px;
+  color: var(--t3);
+  cursor: pointer;
+  padding: 3px 8px;
+  transition: color .1s, border-color .1s;
+}
+#theme-btn:hover { color: var(--t1); border-color: var(--bd-hi); }
 
-        .area-header {
-            padding: 18px 28px;
-            border-bottom: 1px solid var(--border);
-            background: var(--dark);
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            flex-shrink: 0;
-        }
+/* -- add input -- */
+.sb-add {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--bd);
+  flex-shrink: 0;
+}
+.add-row { display: flex; gap: 6px; }
 
-        .area-header-dot {
-            width: 8px; height: 8px;
-            border-radius: 50%;
-            background: var(--blue);
-            box-shadow: 0 0 8px var(--blue-hi);
-            animation: pulse-dot 2s ease-in-out infinite;
-        }
-        @keyframes pulse-dot {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.4; }
-        }
+#topic-input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--bd);
+  border-radius: 1px;
+  color: var(--t1);
+  font-family: var(--font-body);
+  font-size: 13px;
+  padding: 7px 10px;
+  outline: none;
+  transition: border-color .12s;
+}
+#topic-input::placeholder { color: var(--t3); }
+#topic-input:focus { border-color: var(--acc); }
 
-        .area-title {
-            font-family: 'Syne', sans-serif;
-            font-size: 13px;
-            font-weight: 700;
-            letter-spacing: 0.12em;
-            text-transform: uppercase;
-            color: var(--dim);
-        }
+#add-btn {
+  background: var(--acc);
+  border: none;
+  border-radius: 1px;
+  color: #fff;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: .04em;
+  padding: 7px 11px;
+  white-space: nowrap;
+  transition: opacity .1s;
+}
+#add-btn:hover { opacity: .85; }
 
-        .current-badge {
-            margin-left: auto;
-            background: var(--blue-bg);
-            border: 1px solid var(--blue-dim);
-            color: var(--blue-hi);
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 11px;
-            padding: 3px 10px;
-            border-radius: 3px;
-            max-width: 240px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
+/* -- list header -- */
+.sb-list-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 7px 14px 4px;
+  flex-shrink: 0;
+}
+.list-label {
+  font-family: var(--font-ui);
+  font-size: 9px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--t3);
+}
+#item-count {
+  font-family: var(--font-ui);
+  font-size: 9px;
+  color: var(--t3);
+}
 
-        #content-scroll {
-            flex: 1;
-            overflow-y: auto;
-            padding: 36px 48px;
-            scroll-behavior: smooth;
-        }
-        #content-scroll::-webkit-scrollbar { width: 4px; }
-        #content-scroll::-webkit-scrollbar-track { background: transparent; }
-        #content-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+/* -- list -- */
+#item-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 2px 0 8px;
+}
+#item-list::-webkit-scrollbar { width: 3px; }
+#item-list::-webkit-scrollbar-thumb { background: var(--bd); }
 
-        #content { max-width: 780px; }
+.list-empty {
+  padding: 28px 14px;
+  text-align: center;
+  font-family: var(--font-ui);
+  font-size: 10px;
+  color: var(--t3);
+  line-height: 2;
+}
 
-        /* ── Content Typography ── */
-        #content h1 {
-            font-family: 'Syne', sans-serif;
-            font-size: 2rem;
-            font-weight: 800;
-            color: var(--white);
-            margin-bottom: 8px;
-            letter-spacing: -0.02em;
-            line-height: 1.2;
-        }
-        #content h2 {
-            font-family: 'Syne', sans-serif;
-            font-size: 1.25rem;
-            font-weight: 700;
-            color: var(--white);
-            margin: 2rem 0 0.75rem;
-            padding-left: 12px;
-            border-left: 3px solid var(--blue);
-        }
-        #content h3 {
-            font-size: 1rem;
-            font-weight: 600;
-            color: var(--dim);
-            margin: 1.5rem 0 0.5rem;
-            text-transform: uppercase;
-            letter-spacing: 0.08em;
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 0.8rem;
-        }
-        #content p {
-            font-size: 0.95rem;
-            line-height: 1.75;
-            color: #c8c8d8;
-            margin-bottom: 0.85rem;
-        }
-        #content ul, #content ol {
-            margin: 0.5rem 0 1rem 0;
-            padding-left: 0;
-            list-style: none;
-        }
-        #content ul li, #content ol li {
-            position: relative;
-            padding: 6px 0 6px 20px;
-            font-size: 0.93rem;
-            line-height: 1.65;
-            color: #c0c0d4;
-            border-bottom: 1px solid var(--border);
-        }
-        #content ul li:last-child, #content ol li:last-child { border-bottom: none; }
-        #content ul li::before {
-            content: '';
-            position: absolute;
-            left: 0;
-            top: 14px;
-            width: 6px; height: 6px;
-            border-radius: 50%;
-            background: var(--blue);
-        }
-        #content ol { counter-reset: ol-counter; }
-        #content ol li::before {
-            content: counter(ol-counter);
-            counter-increment: ol-counter;
-            position: absolute;
-            left: 0;
-            top: 5px;
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 0.7rem;
-            color: var(--blue);
-            font-weight: 600;
-        }
-        #content pre {
-            background: var(--dark);
-            border: 1px solid var(--border);
-            border-top: 2px solid var(--blue);
-            color: #e0e0f0;
-            padding: 20px;
-            border-radius: 4px;
-            overflow-x: auto;
-            margin: 1rem 0;
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 0.82rem;
-            line-height: 1.7;
-        }
-        #content code {
-            font-family: 'JetBrains Mono', monospace;
-            background: var(--mid);
-            color: var(--blue-hi);
-            padding: 0.15em 0.45em;
-            border-radius: 3px;
-            font-size: 0.83em;
-            border: 1px solid var(--border);
-        }
-        #content pre code {
-            background: none;
-            border: none;
-            color: inherit;
-            padding: 0;
-        }
-        #content strong { color: var(--white); font-weight: 600; }
-        #content em { color: var(--blue-hi); font-style: normal; font-weight: 500; }
-        #content blockquote {
-            border-left: 3px solid var(--muted);
-            padding: 10px 16px;
-            background: var(--mid);
-            border-radius: 0 4px 4px 0;
-            margin: 1rem 0;
-            color: var(--dim);
-            font-style: italic;
-        }
+/* -- item row -- */
+.item-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px 8px 10px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+  transition: background .08s, border-color .08s;
+  user-select: none;
+  position: relative;
+}
+.item-row:hover { background: var(--raised); }
+.item-row.selected {
+  background: var(--raised);
+  border-left-color: var(--acc);
+}
 
-        /* ── Interactive elements injected by AI ── */
-        /* Quiz / self-check */
-        #content .quiz-block {
-            background: var(--mid);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            padding: 20px;
-            margin: 1.5rem 0;
-        }
-        #content .quiz-block .quiz-q {
-            font-family: 'Syne', sans-serif;
-            font-size: 0.95rem;
-            font-weight: 700;
-            color: var(--white);
-            margin-bottom: 12px;
-        }
-        #content .quiz-option {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 9px 14px;
-            border-radius: 4px;
-            border: 1px solid var(--border);
-            cursor: pointer;
-            margin: 5px 0;
-            font-size: 0.88rem;
-            color: var(--dim);
-            transition: all 0.15s;
-            user-select: none;
-        }
-        #content .quiz-option:hover { border-color: var(--blue); color: var(--white); }
-        #content .quiz-option.correct { border-color: #22c55e; color: #4ade80; background: #052e16; }
-        #content .quiz-option.wrong   { border-color: #ef4444; color: #fca5a5; background: #2a0a0a; }
-        #content .quiz-feedback {
-            margin-top: 12px;
-            font-size: 0.83rem;
-            padding: 8px 12px;
-            border-radius: 3px;
-            display: none;
-        }
-        #content .quiz-feedback.show { display: block; }
-        #content .quiz-feedback.ok  { background: #052e16; color: #4ade80; border: 1px solid #166534; }
-        #content .quiz-feedback.err { background: #2a0a0a; color: #fca5a5; border: 1px solid #7f1d1d; }
+/* status dot */
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.dot-pending { background: var(--t3); }
+.dot-loading { background: var(--acc); animation: blink .7s ease-in-out infinite; }
+.dot-done    { background: var(--grn); }
+.dot-error   { background: var(--red); }
 
-        /* Collapsible sections */
-        #content details {
-            border: 1px solid var(--border);
-            border-radius: 4px;
-            margin: 1rem 0;
-            overflow: hidden;
-        }
-        #content summary {
-            padding: 12px 16px;
-            background: var(--mid);
-            cursor: pointer;
-            font-family: 'Syne', sans-serif;
-            font-size: 0.88rem;
-            font-weight: 700;
-            color: var(--blue-hi);
-            list-style: none;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            user-select: none;
-        }
-        #content summary::before {
-            content: '▶';
-            font-size: 0.6rem;
-            transition: transform 0.2s;
-        }
-        #content details[open] summary::before { transform: rotate(90deg); }
-        #content details > *:not(summary) {
-            padding: 16px;
-            background: var(--dark);
-        }
+@keyframes blink {
+  0%,100% { opacity: 1; }
+  50%      { opacity: .3; }
+}
 
-        /* Key term cards */
-        #content .term-card {
-            display: inline-block;
-            background: var(--blue-bg);
-            border: 1px solid var(--blue-dim);
-            color: var(--blue-hi);
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 0.8rem;
-            padding: 3px 10px;
-            border-radius: 3px;
-            margin: 2px;
-            cursor: default;
-        }
+.item-body { flex: 1; overflow: hidden; }
+.item-topic {
+  font-size: 12px;
+  color: var(--t1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+.item-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 2px;
+}
+.tag {
+  font-family: var(--font-ui);
+  font-size: 8px;
+  letter-spacing: .04em;
+  padding: 1px 5px;
+  border: 1px solid var(--bd);
+  border-radius: 1px;
+  color: var(--t3);
+}
+.tag-rec {
+  border-color: var(--acc-bd);
+  color: var(--acc);
+  background: var(--acc-bg);
+}
+.item-time {
+  font-family: var(--font-ui);
+  font-size: 8px;
+  color: var(--t3);
+}
 
-        /* Progress / chapter bar */
-        #content .chapter-nav {
-            display: flex;
-            gap: 6px;
-            flex-wrap: wrap;
-            margin: 1rem 0 1.5rem;
-        }
-        #content .chapter-pill {
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 0.72rem;
-            padding: 4px 10px;
-            border-radius: 2px;
-            background: var(--mid);
-            border: 1px solid var(--border);
-            color: var(--muted);
-        }
-        #content .chapter-pill.active {
-            background: var(--blue-bg);
-            border-color: var(--blue);
-            color: var(--blue-hi);
-        }
+.item-del {
+  display: none;
+  background: none;
+  border: none;
+  color: var(--t3);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 1px 3px;
+  flex-shrink: 0;
+}
+.item-row:hover .item-del { display: block; }
+.item-del:hover { color: var(--red); }
 
-        /* Flashcard flip */
-        #content .flashcard-wrap {
-            perspective: 800px;
-            margin: 1.2rem 0;
-        }
-        #content .flashcard {
-            position: relative;
-            width: 100%;
-            min-height: 90px;
-            transform-style: preserve-3d;
-            transition: transform 0.4s;
-            cursor: pointer;
-        }
-        #content .flashcard.flipped { transform: rotateY(180deg); }
-        #content .flashcard-front,
-        #content .flashcard-back {
-            position: absolute;
-            width: 100%;
-            min-height: 90px;
-            backface-visibility: hidden;
-            border-radius: 4px;
-            padding: 18px 20px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 0.9rem;
-            text-align: center;
-        }
-        #content .flashcard-front {
-            background: var(--mid);
-            border: 1px solid var(--border);
-            color: var(--white);
-            font-weight: 600;
-        }
-        #content .flashcard-back {
-            background: var(--blue-bg);
-            border: 1px solid var(--blue-dim);
-            color: var(--dim);
-            transform: rotateY(180deg);
-        }
-        #content .flashcard-hint {
-            text-align: right;
-            font-size: 0.7rem;
-            color: var(--muted);
-            margin-top: 4px;
-            font-family: 'JetBrains Mono', monospace;
-        }
+/* ═══════════════════════════════════════
+   MAIN
+═══════════════════════════════════════ */
+#main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
 
-        /* Divider */
-        #content hr {
-            border: none;
-            border-top: 1px solid var(--border);
-            margin: 2rem 0;
-        }
+/* -- topbar -- */
+#topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 24px;
+  height: 46px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--bd);
+  flex-shrink: 0;
+}
+#top-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--t3);
+  flex-shrink: 0;
+  transition: background .2s;
+}
+#top-dot.loading { background: var(--acc); animation: blink .7s ease-in-out infinite; }
+#top-dot.done    { background: var(--grn); }
+#top-dot.error   { background: var(--red); }
+#top-dot.pending { background: var(--amb); }
 
-        /* ── Empty / Loading / Done States ── */
-        .state-center {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            min-height: 60vh;
-            gap: 12px;
-            color: var(--muted);
-        }
-        .state-icon {
-            width: 48px; height: 48px;
-            opacity: 0.4;
-        }
-        .state-label {
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 0.82rem;
-            letter-spacing: 0.05em;
-        }
+#top-topic {
+  flex: 1;
+  font-family: var(--font-head);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  color: var(--t1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#top-status {
+  font-family: var(--font-ui);
+  font-size: 9px;
+  letter-spacing: .08em;
+  color: var(--t3);
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
 
-        .spinner {
-            width: 32px; height: 32px;
-            border: 2px solid var(--border);
-            border-top-color: var(--blue);
-            border-radius: 50%;
-            animation: spin 0.7s linear infinite;
-        }
-        @keyframes spin { to { transform: rotate(360deg); } }
+/* -- content scroll -- */
+#content-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 32px 44px;
+}
+#content-scroll::-webkit-scrollbar { width: 4px; }
+#content-scroll::-webkit-scrollbar-thumb { background: var(--bd); }
 
-        .error-box {
-            background: #180a0a;
-            border: 1px solid #7f1d1d;
-            border-radius: 4px;
-            padding: 20px 24px;
-            color: #fca5a5;
-            text-align: center;
-            max-width: 480px;
-            margin: 0 auto;
-        }
-        .error-box p { font-size: 0.88rem; margin-bottom: 12px; }
-        .retry-btn {
-            background: #7f1d1d;
-            color: #fca5a5;
-            border: none;
-            border-radius: 3px;
-            padding: 7px 18px;
-            font-size: 0.82rem;
-            cursor: pointer;
-            font-family: 'JetBrains Mono', monospace;
-        }
-        .retry-btn:hover { background: #991b1b; }
+/* ── State Screens ── */
+.state-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 58vh;
+  gap: 14px;
+  text-align: center;
+}
+.state-icon {
+  width: 44px;
+  height: 44px;
+  color: var(--t3);
+}
+.state-title {
+  font-family: var(--font-head);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  color: var(--t2);
+}
+.state-sub {
+  font-family: var(--font-ui);
+  font-size: 11px;
+  color: var(--t3);
+  line-height: 1.8;
+}
+.gen-btn {
+  margin-top: 6px;
+  background: var(--acc);
+  border: none;
+  border-radius: 1px;
+  color: #fff;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: .06em;
+  padding: 9px 22px;
+  text-transform: uppercase;
+  transition: opacity .1s;
+}
+.gen-btn:hover { opacity: .85; }
 
-        /* ── Floating "Insert" Button ── */
-        #float-btn {
-            position: absolute;
-            z-index: 1000;
-            display: none;
-            background: var(--blue);
-            color: #fff;
-            border: none;
-            border-radius: 3px;
-            padding: 5px 12px;
-            font-size: 12px;
-            font-family: 'JetBrains Mono', monospace;
-            cursor: pointer;
-            box-shadow: 0 4px 16px rgba(37,99,235,0.4);
-            white-space: nowrap;
-            letter-spacing: 0.03em;
-        }
-        #float-btn::before { content: '+ '; }
-        #float-btn:hover { background: var(--blue-lo); }
+/* Skeleton */
+.skel { max-width: 640px; width: 100%; margin-top: 20px; }
+.skel-line {
+  height: 13px;
+  background: var(--raised);
+  border-radius: 1px;
+  margin-bottom: 9px;
+  animation: shimmer 1.1s ease-in-out infinite;
+}
+.skel-line.h1   { height: 26px; width: 50%; margin-bottom: 18px; }
+.skel-line.w100 { width: 100%; }
+.skel-line.w75  { width: 75%; }
+.skel-line.w55  { width: 55%; }
+.skel-line.w40  { width: 40%; }
+@keyframes shimmer {
+  0%,100% { opacity: .35; }
+  50%      { opacity: .8; }
+}
 
-        /* ── Right: Queue Panel ── */
-        #queue-panel {
-            width: 300px;
-            flex-shrink: 0;
-            background: var(--dark);
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-        }
+/* Error */
+.err-box {
+  background: var(--red-bg);
+  border: 1px solid var(--red);
+  border-radius: 1px;
+  padding: 18px 22px;
+  max-width: 420px;
+}
+.err-box p { color: var(--red); font-size: 12px; line-height: 1.6; margin-bottom: 12px; }
+.retry-btn {
+  background: var(--red);
+  border: none;
+  border-radius: 1px;
+  color: #fff;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: 10px;
+  letter-spacing: .06em;
+  padding: 6px 14px;
+  text-transform: uppercase;
+}
+.retry-btn:hover { opacity: .85; }
 
-        .panel-header {
-            padding: 18px 20px 14px;
-            border-bottom: 1px solid var(--border);
-        }
-        .panel-title {
-            font-family: 'Syne', sans-serif;
-            font-size: 11px;
-            font-weight: 800;
-            letter-spacing: 0.14em;
-            text-transform: uppercase;
-            color: var(--muted);
-            margin-bottom: 12px;
-        }
+/* ═══════════════════════════════════════
+   CONTENT DOC TYPOGRAPHY
+═══════════════════════════════════════ */
+#content-doc { max-width: 740px; }
 
-        .input-row {
-            display: flex;
-            gap: 6px;
-        }
-        #topic-input {
-            flex: 1;
-            background: var(--mid);
-            border: 1px solid var(--border);
-            border-radius: 3px;
-            color: var(--white);
-            font-family: 'Inter', sans-serif;
-            font-size: 0.83rem;
-            padding: 8px 12px;
-            outline: none;
-            transition: border-color 0.15s;
-        }
-        #topic-input::placeholder { color: var(--muted); }
-        #topic-input:focus { border-color: var(--blue); }
+#content-doc h1 {
+  font-family: var(--font-head);
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--t1);
+  letter-spacing: -.01em;
+  line-height: 1.15;
+  margin-bottom: 10px;
+}
+#content-doc h2 {
+  font-family: var(--font-head);
+  font-size: 1.2rem;
+  font-weight: 600;
+  color: var(--t1);
+  letter-spacing: .03em;
+  margin: 2rem 0 .6rem;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--bd);
+}
+#content-doc h3 {
+  font-family: var(--font-ui);
+  font-size: .72rem;
+  font-weight: 500;
+  color: var(--t2);
+  text-transform: uppercase;
+  letter-spacing: .1em;
+  margin: 1.4rem 0 .4rem;
+}
+#content-doc p {
+  font-size: .88rem;
+  line-height: 1.82;
+  color: var(--t2);
+  margin-bottom: .75rem;
+}
+#content-doc ul, #content-doc ol {
+  list-style: none;
+  margin: .4rem 0 .9rem;
+  padding: 0;
+}
+#content-doc ul li, #content-doc ol li {
+  font-size: .86rem;
+  line-height: 1.7;
+  color: var(--t2);
+  padding: 5px 0 5px 16px;
+  border-bottom: 1px solid var(--bd);
+  position: relative;
+}
+#content-doc ul li:last-child,
+#content-doc ol li:last-child { border-bottom: none; }
+#content-doc ul li::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 13px;
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--acc);
+}
+#content-doc ol { counter-reset: lic; }
+#content-doc ol li::before {
+  content: counter(lic, decimal-leading-zero);
+  counter-increment: lic;
+  position: absolute;
+  left: 0; top: 6px;
+  font-family: var(--font-ui);
+  font-size: .65rem;
+  color: var(--acc);
+  font-weight: 500;
+}
+#content-doc pre {
+  background: var(--surface);
+  border: 1px solid var(--bd);
+  border-left: 3px solid var(--acc);
+  padding: 16px 18px;
+  border-radius: 1px;
+  overflow-x: auto;
+  margin: .9rem 0;
+  font-family: var(--font-ui);
+  font-size: .78rem;
+  line-height: 1.75;
+  color: var(--t1);
+}
+#content-doc code {
+  font-family: var(--font-ui);
+  background: var(--raised);
+  color: var(--acc);
+  padding: .12em .38em;
+  border-radius: 1px;
+  font-size: .8em;
+  border: 1px solid var(--bd);
+}
+#content-doc pre code {
+  background: none; border: none; color: inherit; padding: 0;
+}
+#content-doc strong { color: var(--t1); font-weight: 600; }
+#content-doc em { color: var(--acc); font-style: normal; }
+#content-doc blockquote {
+  border-left: 3px solid var(--bd-hi);
+  padding: 8px 14px;
+  background: var(--raised);
+  margin: .9rem 0;
+  color: var(--t2);
+  font-size: .86rem;
+}
+#content-doc hr {
+  border: none;
+  border-top: 1px solid var(--bd);
+  margin: 1.8rem 0;
+}
+#content-doc details {
+  border: 1px solid var(--bd);
+  border-radius: 1px;
+  margin: .9rem 0;
+  overflow: hidden;
+}
+#content-doc summary {
+  padding: 9px 13px;
+  background: var(--raised);
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: .78rem;
+  color: var(--acc);
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  user-select: none;
+}
+#content-doc summary::before {
+  content: "▶";
+  font-size: .5rem;
+  transition: transform .15s;
+}
+#content-doc details[open] summary::before { transform: rotate(90deg); }
+#content-doc details > *:not(summary) { padding: 13px; }
 
-        #add-btn {
-            background: var(--blue);
-            color: #fff;
-            border: none;
-            border-radius: 3px;
-            padding: 8px 14px;
-            font-size: 0.8rem;
-            font-weight: 600;
-            cursor: pointer;
-            font-family: 'Syne', sans-serif;
-            letter-spacing: 0.04em;
-            transition: background 0.15s;
-        }
-        #add-btn:hover { background: var(--blue-lo); }
+/* ── Interactive: Quiz ── */
+#content-doc .quiz-block {
+  background: var(--raised);
+  border: 1px solid var(--bd);
+  border-radius: 1px;
+  padding: 16px 18px;
+  margin: 1.4rem 0;
+}
+#content-doc .quiz-q {
+  font-family: var(--font-ui);
+  font-size: .82rem;
+  font-weight: 500;
+  color: var(--t1);
+  margin-bottom: 11px;
+  line-height: 1.55;
+}
+#content-doc .quiz-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 7px 11px;
+  border: 1px solid var(--bd);
+  border-radius: 1px;
+  cursor: pointer;
+  margin: 4px 0;
+  font-size: .83rem;
+  color: var(--t2);
+  transition: border-color .1s, color .1s, background .1s;
+  user-select: none;
+  line-height: 1.5;
+}
+#content-doc .quiz-option:hover:not([disabled]) {
+  border-color: var(--acc);
+  color: var(--t1);
+}
+#content-doc .quiz-option.correct {
+  border-color: var(--grn) !important;
+  color: var(--grn) !important;
+  background: var(--grn-bg) !important;
+  pointer-events: none;
+}
+#content-doc .quiz-option.wrong {
+  border-color: var(--red) !important;
+  color: var(--red) !important;
+  background: var(--red-bg) !important;
+  pointer-events: none;
+}
+#content-doc .quiz-feedback {
+  margin-top: 9px;
+  padding: 7px 11px;
+  font-family: var(--font-ui);
+  font-size: .75rem;
+  border-radius: 1px;
+  display: none;
+  line-height: 1.55;
+}
+#content-doc .quiz-feedback.show { display: block; }
+#content-doc .quiz-feedback.ok {
+  background: var(--grn-bg);
+  color: var(--grn);
+  border: 1px solid var(--grn);
+}
+#content-doc .quiz-feedback.err {
+  background: var(--red-bg);
+  color: var(--red);
+  border: 1px solid var(--red);
+}
 
-        /* Current item */
-        .section-label {
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 10px;
-            letter-spacing: 0.1em;
-            text-transform: uppercase;
-            color: var(--muted);
-            margin-bottom: 6px;
-        }
-        .current-section {
-            padding: 14px 20px;
-            border-bottom: 1px solid var(--border);
-        }
-        #current-display {
-            font-size: 0.85rem;
-        }
-        .current-chip {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            background: var(--blue-bg);
-            border: 1px solid var(--blue-dim);
-            color: var(--blue-hi);
-            border-radius: 3px;
-            padding: 4px 10px;
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 0.78rem;
-            max-width: 240px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-        .current-chip::before {
-            content: '';
-            width: 6px; height: 6px;
-            border-radius: 50%;
-            background: var(--blue-hi);
-            flex-shrink: 0;
-            animation: pulse-dot 1.5s ease-in-out infinite;
-        }
+/* ── Interactive: Flashcard ── */
+#content-doc .flashcard-wrap {
+  perspective: 900px;
+  margin: 1.1rem 0;
+}
+#content-doc .flashcard {
+  position: relative;
+  width: 100%;
+  min-height: 82px;
+  transform-style: preserve-3d;
+  transition: transform .32s ease;
+  cursor: pointer;
+}
+#content-doc .flashcard.flipped { transform: rotateY(180deg); }
+#content-doc .flashcard-front,
+#content-doc .flashcard-back {
+  position: absolute;
+  width: 100%;
+  min-height: 82px;
+  backface-visibility: hidden;
+  border-radius: 1px;
+  padding: 16px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: .86rem;
+  text-align: center;
+  line-height: 1.5;
+}
+#content-doc .flashcard-front {
+  background: var(--raised);
+  border: 1px solid var(--bd);
+  color: var(--t1);
+  font-weight: 500;
+}
+#content-doc .flashcard-back {
+  background: var(--acc-bg);
+  border: 1px solid var(--acc-bd);
+  color: var(--t2);
+  transform: rotateY(180deg);
+}
+#content-doc .flashcard-hint {
+  font-family: var(--font-ui);
+  font-size: 8px;
+  color: var(--t3);
+  margin-top: 4px;
+  text-align: right;
+  letter-spacing: .05em;
+}
 
-        /* Queue list */
-        .queue-scroll {
-            flex: 1;
-            overflow-y: auto;
-            padding: 14px 20px;
-        }
-        .queue-scroll::-webkit-scrollbar { width: 3px; }
-        .queue-scroll::-webkit-scrollbar-thumb { background: var(--border); }
+/* ── Interactive: Term & Chapter ── */
+#content-doc .term-card {
+  display: inline-block;
+  background: var(--acc-bg);
+  border: 1px solid var(--acc-bd);
+  color: var(--acc);
+  font-family: var(--font-ui);
+  font-size: .72rem;
+  padding: 1px 6px;
+  border-radius: 1px;
+  margin: 1px 2px;
+}
+#content-doc .chapter-nav {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin: .7rem 0 1.4rem;
+  padding-bottom: 11px;
+  border-bottom: 1px solid var(--bd);
+}
+#content-doc .chapter-pill {
+  font-family: var(--font-ui);
+  font-size: .68rem;
+  padding: 3px 8px;
+  border: 1px solid var(--bd);
+  color: var(--t3);
+  border-radius: 1px;
+}
+#content-doc .chapter-pill.active {
+  background: var(--acc-bg);
+  border-color: var(--acc-bd);
+  color: var(--acc);
+}
 
-        .queue-empty {
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 0.75rem;
-            color: var(--muted);
-            text-align: center;
-            padding: 24px 0;
-        }
-
-        .queue-item {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 9px 10px;
-            border-radius: 3px;
-            margin-bottom: 2px;
-            transition: background 0.12s;
-            cursor: default;
-        }
-        .queue-item:hover { background: var(--mid); }
-
-        .q-index {
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 0.7rem;
-            color: var(--muted);
-            flex-shrink: 0;
-            width: 16px;
-            text-align: center;
-        }
-        .q-topic {
-            flex: 1;
-            font-size: 0.83rem;
-            color: var(--dim);
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-        .q-tag {
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 0.65rem;
-            padding: 2px 6px;
-            border-radius: 2px;
-            flex-shrink: 0;
-        }
-        .q-tag.recursive {
-            background: var(--blue-bg);
-            color: var(--blue-hi);
-            border: 1px solid var(--blue-dim);
-        }
-        .q-tag.initial {
-            background: var(--mid);
-            color: var(--muted);
-            border: 1px solid var(--border);
-        }
-
-        /* Next button */
-        .next-wrap {
-            padding: 14px 20px;
-            border-top: 1px solid var(--border);
-        }
-        #next-btn {
-            width: 100%;
-            padding: 11px;
-            background: var(--blue);
-            color: #fff;
-            border: none;
-            border-radius: 3px;
-            font-family: 'Syne', sans-serif;
-            font-size: 0.85rem;
-            font-weight: 700;
-            letter-spacing: 0.06em;
-            cursor: pointer;
-            transition: background 0.15s, opacity 0.15s;
-            text-transform: uppercase;
-        }
-        #next-btn:hover:not(:disabled) { background: var(--blue-lo); }
-        #next-btn:disabled {
-            opacity: 0.25;
-            cursor: not-allowed;
-        }
-    </style>
+/* ── Float Button ── */
+#float-btn {
+  position: absolute;
+  z-index: 999;
+  display: none;
+  background: var(--acc);
+  color: #fff;
+  border: none;
+  border-radius: 1px;
+  padding: 5px 12px;
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: .06em;
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0,0,0,.35);
+}
+#float-btn:hover { opacity: .88; }
+</style>
 </head>
 <body>
-    <div class="app-shell">
-        <!-- ── Left: Learning Area ── -->
-        <div id="learning-area">
-            <div class="area-header">
-                <div class="area-header-dot"></div>
-                <span class="area-title">学习区</span>
-                <div class="current-badge" id="header-current">— 暂无主题 —</div>
-            </div>
-            <div id="content-scroll">
-                <div id="content">
-                    <div class="state-center">
-                        <svg class="state-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
-                        </svg>
-                        <span class="state-label">在右侧输入主题，开始学习</span>
-                    </div>
-                </div>
-            </div>
-            <button id="float-btn">插入队列</button>
-        </div>
 
-        <!-- ── Right: Queue Panel ── -->
-        <div id="queue-panel">
-            <div class="panel-header">
-                <div class="panel-title">学习队列</div>
-                <div class="input-row">
-                    <input type="text" id="topic-input" placeholder="输入单词或概念，回车添加" autocomplete="off">
-                    <button id="add-btn">添加</button>
-                </div>
-            </div>
+<!-- ════════════ SIDEBAR ════════════ -->
+<div id="sidebar">
+  <div class="sb-top">
+    <span class="brand">递归<em>·</em>学习</span>
+    <button id="theme-btn" onclick="toggleTheme()">LIGHT</button>
+  </div>
 
-            <div class="current-section">
-                <div class="section-label">当前学习</div>
-                <div id="current-display">
-                    <span style="color:var(--muted);font-size:0.8rem;font-family:'JetBrains Mono',monospace;">— 暂无 —</span>
-                </div>
-            </div>
-
-            <div class="queue-scroll">
-                <div class="section-label" style="margin-bottom:8px;">待学队列</div>
-                <ul id="queue-list" style="list-style:none;">
-                    <li class="queue-empty">队列为空</li>
-                </ul>
-            </div>
-
-            <div class="next-wrap">
-                <button id="next-btn" disabled>下一个 →</button>
-            </div>
-        </div>
+  <div class="sb-add">
+    <div class="add-row">
+      <input type="text" id="topic-input" placeholder="输入主题，回车添加" autocomplete="off">
+      <button id="add-btn" onclick="handleAdd()">+ 添加</button>
     </div>
+  </div>
 
-    <script>
-        // ── State ──
-        let queue = [];
-        let current = null;
-        let nextId = 0;
-        const floatBtn = document.getElementById('float-btn');
+  <div class="sb-list-top">
+    <span class="list-label">全部记录</span>
+    <span id="item-count">0 / 32</span>
+  </div>
 
-        // ── DOM ──
-        const contentDiv    = document.getElementById('content');
-        const queueList     = document.getElementById('queue-list');
-        const currentDisplay= document.getElementById('current-display');
-        const nextBtn       = document.getElementById('next-btn');
-        const topicInput    = document.getElementById('topic-input');
-        const addBtn        = document.getElementById('add-btn');
-        const headerCurrent = document.getElementById('header-current');
+  <div id="item-list"></div>
+</div>
 
-        // ── Utilities ──
-        function escapeHtml(t) {
-            return t.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
-        }
+<!-- ════════════ MAIN ════════════ -->
+<div id="main">
+  <div id="topbar">
+    <div id="top-dot"></div>
+    <div id="top-topic">选择或添加主题开始学习</div>
+    <div id="top-status">—</div>
+  </div>
+  <div id="content-scroll">
+    <div id="content-doc"></div>
+  </div>
+  <button id="float-btn" onclick="floatClick()">+ 加入队列</button>
+</div>
 
-        function renderQueuePanel() {
-            // Header badge
-            headerCurrent.textContent = current ? current.topic : '— 暂无主题 —';
+<script>
+// ════════════════════════════════════════
+//  STATE & PERSISTENCE
+// ════════════════════════════════════════
+var STORE_KEY = "rlq_v4";
+var MAX = 32;
 
-            // Current chip
-            if (current) {
-                currentDisplay.innerHTML = `<span class="current-chip">${escapeHtml(current.topic)}</span>`;
-            } else {
-                currentDisplay.innerHTML = '<span style="color:var(--muted);font-size:0.8rem;font-family:\'JetBrains Mono\',monospace;">— 暂无 —</span>';
-            }
+var items      = [];   // {id,topic,isRecursive,status,htmlContent,errorMsg,ts}
+var selId      = null; // selected item id
+var theme      = "dark";
+var nextId     = 1;
 
-            // Queue list
-            if (queue.length === 0) {
-                queueList.innerHTML = '<li class="queue-empty">队列为空</li>';
-            } else {
-                queueList.innerHTML = queue.map((item, idx) => `
-                    <li class="queue-item">
-                        <span class="q-index">${idx+1}</span>
-                        <span class="q-topic">${escapeHtml(item.topic)}</span>
-                        <span class="q-tag ${item.isRecursive ? 'recursive' : 'initial'}">${item.isRecursive ? '递归' : '初始'}</span>
-                    </li>
-                `).join('');
-            }
+function saveState() {
+  var toSave = items.map(function(it) {
+    return {
+      id: it.id,
+      topic: it.topic,
+      isRecursive: it.isRecursive,
+      status: (it.status === "loading") ? "pending" : it.status,
+      htmlContent: it.htmlContent || null,
+      errorMsg: it.errorMsg || null,
+      ts: it.ts
+    };
+  });
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify({
+      items: toSave, selId: selId, theme: theme, nextId: nextId
+    }));
+  } catch(e) {}
+}
 
-            nextBtn.disabled = !current;
-        }
+function loadState() {
+  try {
+    var raw = localStorage.getItem(STORE_KEY);
+    if (!raw) return;
+    var d = JSON.parse(raw);
+    items  = d.items  || [];
+    selId  = (d.selId !== undefined) ? d.selId : null;
+    theme  = d.theme  || "dark";
+    nextId = d.nextId || items.length + 1;
+  } catch(e) {}
+}
 
-        function showLoading() {
-            contentDiv.innerHTML = `
-                <div class="state-center">
-                    <div class="spinner"></div>
-                    <span class="state-label">正在生成学习内容…</span>
-                </div>`;
-        }
+// ════════════════════════════════════════
+//  UTILITIES
+// ════════════════════════════════════════
+function esc(t) {
+  return String(t).replace(/[&<>"']/g, function(c) {
+    return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c];
+  });
+}
+function relTime(ts) {
+  var d = Date.now() - ts;
+  if (d < 60000)    return "刚刚";
+  if (d < 3600000)  return Math.floor(d/60000) + "m前";
+  if (d < 86400000) return Math.floor(d/3600000) + "h前";
+  return Math.floor(d/86400000) + "d前";
+}
+function findItem(id) {
+  for (var i = 0; i < items.length; i++) if (items[i].id === id) return items[i];
+  return null;
+}
 
-        function showError(message, retryCallback) {
-            contentDiv.innerHTML = `
-                <div class="state-center">
-                    <div class="error-box">
-                        <p>❌ ${escapeHtml(message)}</p>
-                        <button class="retry-btn" onclick="(${retryCallback.toString()})()">重试</button>
-                    </div>
-                </div>`;
-        }
+// Re-execute scripts injected via innerHTML
+function runScripts(el) {
+  var scripts = el.querySelectorAll("script");
+  for (var i = 0; i < scripts.length; i++) {
+    var s = document.createElement("script");
+    s.textContent = scripts[i].textContent;
+    document.head.appendChild(s);
+    document.head.removeChild(s);
+  }
+}
 
-        function showCompletion() {
-            contentDiv.innerHTML = `
-                <div class="state-center">
-                    <svg class="state-icon" style="opacity:0.6;color:#22c55e;" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                    <span class="state-label">已完成 · 可继续添加新主题</span>
-                </div>`;
-        }
+// ════════════════════════════════════════
+//  THEME
+// ════════════════════════════════════════
+function applyTheme() {
+  document.documentElement.setAttribute("data-theme", theme);
+  document.getElementById("theme-btn").textContent = (theme === "dark") ? "LIGHT" : "DARK";
+}
+function toggleTheme() {
+  theme = (theme === "dark") ? "light" : "dark";
+  applyTheme();
+  saveState();
+}
 
-        // ── Generate Content ──
-        async function generateContent(topic, isRecursive) {
-            const response = await fetch('/api/generate', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ topic, isRecursive })
-            });
-            if (!response.ok) {
-                const err = await response.json().catch(() => ({ detail: '未知错误' }));
-                throw new Error(err.detail || `请求失败 (${response.status})`);
-            }
-            const data = await response.json();
-            if (!data.htmlContent) throw new Error('生成内容为空');
-            return data.htmlContent;
-        }
+// ════════════════════════════════════════
+//  RENDER SIDEBAR
+// ════════════════════════════════════════
+function renderSidebar() {
+  var listEl = document.getElementById("item-list");
+  document.getElementById("item-count").textContent = items.length + " / " + MAX;
 
-        // ── Start Learning ──
-        async function startLearning(item) {
-            current = item;
-            renderQueuePanel();
-            showLoading();
-            try {
-                const htmlContent = await generateContent(item.topic, item.isRecursive);
-                current.htmlContent = htmlContent;
-                current.status = 'done';
-                contentDiv.innerHTML = htmlContent;
-                document.getElementById('content-scroll').scrollTo({ top: 0, behavior: 'smooth' });
-                renderQueuePanel();
-            } catch (error) {
-                showError(error.message, () => startLearning(item));
-            }
-        }
+  if (items.length === 0) {
+    listEl.innerHTML = "<div class=\"list-empty\">暂无记录<br>在上方添加第一个主题</div>";
+    return;
+  }
 
-        // ── Add Topic ──
-        function addTopic(topic, isRecursive) {
-            if (!topic.trim()) return;
-            const item = { id: nextId++, topic: topic.trim(), isRecursive };
-            if (!current && queue.length === 0) {
-                startLearning(item);
-            } else {
-                queue.push(item);
-                renderQueuePanel();
-            }
-        }
+  listEl.innerHTML = items.map(function(it) {
+    var active = (it.id === selId) ? " selected" : "";
+    var dotCls = "dot dot-" + it.status;
+    var tagHtml = it.isRecursive
+      ? "<span class=\"tag tag-rec\">递归</span>"
+      : "<span class=\"tag\">初始</span>";
 
-        // ── Next Topic ──
-        function nextTopic() {
-            if (!current) return;
-            current = null;
-            if (queue.length > 0) {
-                startLearning(queue.shift());
-            } else {
-                showCompletion();
-                renderQueuePanel();
-            }
-        }
+    return "<div class=\"item-row" + active + "\" onclick=\"selectItem(" + it.id + ")\">" +
+      "<div class=\"" + dotCls + "\"></div>" +
+      "<div class=\"item-body\">" +
+        "<div class=\"item-topic\">" + esc(it.topic) + "</div>" +
+        "<div class=\"item-meta\">" + tagHtml +
+          "<span class=\"item-time\">" + relTime(it.ts) + "</span>" +
+        "</div>" +
+      "</div>" +
+      "<button class=\"item-del\" onclick=\"delItem(event," + it.id + ")\">×</button>" +
+      "</div>";
+  }).join("");
+}
 
-        // ── Float Button ──
-        function hideFloatBtn() { floatBtn.style.display = 'none'; }
+// ════════════════════════════════════════
+//  RENDER MAIN CONTENT
+// ════════════════════════════════════════
+var STATUS_LABEL = {
+  pending: "待生成",
+  loading: "生成中",
+  done:    "已完成",
+  error:   "出错"
+};
 
-        document.getElementById('learning-area').addEventListener('mouseup', function() {
-            setTimeout(() => {
-                const sel = window.getSelection();
-                const text = sel.toString().trim();
-                if (!text || sel.rangeCount === 0) { hideFloatBtn(); return; }
-                const range = sel.getRangeAt(0);
-                if (!contentDiv.contains(range.commonAncestorContainer)) { hideFloatBtn(); return; }
-                const rect = range.getBoundingClientRect();
-                const sl = window.pageXOffset || document.documentElement.scrollLeft;
-                const st = window.pageYOffset || document.documentElement.scrollTop;
-                floatBtn.style.display = 'block';
-                floatBtn.style.left = (rect.left + sl + rect.width/2 - floatBtn.offsetWidth/2) + 'px';
-                floatBtn.style.top  = (rect.bottom + st + 6) + 'px';
-                floatBtn.dataset.text = text;
-            }, 10);
-        });
+function setTopbar(topic, status) {
+  var dot = document.getElementById("top-dot");
+  dot.className = status ? ("status-dot " + status) : "";
+  // Remove all status classes then add the right one
+  dot.classList.remove("loading", "done", "error", "pending");
+  if (status) dot.classList.add(status);
+  document.getElementById("top-topic").textContent = topic || "选择或添加主题开始学习";
+  document.getElementById("top-status").textContent = status ? (STATUS_LABEL[status] || "") : "—";
+}
 
-        floatBtn.addEventListener('click', function(e) {
-            e.stopPropagation();
-            const text = floatBtn.dataset.text;
-            if (text) addTopic(text, true);
-            hideFloatBtn();
-            window.getSelection().removeAllRanges();
-        });
+function renderMain() {
+  var doc = document.getElementById("content-doc");
+  var item = (selId !== null) ? findItem(selId) : null;
 
-        document.addEventListener('mousedown', function(e) {
-            if (e.target !== floatBtn && !floatBtn.contains(e.target)) hideFloatBtn();
-        });
+  if (!item) {
+    setTopbar(null, null);
+    doc.innerHTML =
+      "<div class=\"state-screen\">" +
+        "<svg class=\"state-icon\" fill=\"none\" viewBox=\"0 0 24 24\" stroke=\"currentColor\">" +
+          "<path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1\" " +
+          "d=\"M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13" +
+          "C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 " +
+          "16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 " +
+          "0-3.332.477-4.5 1.253\"/>" +
+        "</svg>" +
+        "<div class=\"state-title\">递归学习队列</div>" +
+        "<div class=\"state-sub\">在左侧输入主题并添加<br>点击任意记录查看内容</div>" +
+      "</div>";
+    return;
+  }
 
-        // ── Events ──
-        addBtn.addEventListener('click', () => {
-            const topic = topicInput.value;
-            if (topic.trim()) { addTopic(topic, false); topicInput.value = ''; }
-        });
+  setTopbar(item.topic, item.status);
 
-        topicInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') { e.preventDefault(); addBtn.click(); }
-        });
+  if (item.status === "pending") {
+    doc.innerHTML =
+      "<div class=\"state-screen\">" +
+        "<div class=\"state-title\">" + esc(item.topic) + "</div>" +
+        "<div class=\"state-sub\">内容尚未生成</div>" +
+        "<button class=\"gen-btn\" onclick=\"generateSelected()\">生成内容</button>" +
+      "</div>";
+    return;
+  }
 
-        nextBtn.addEventListener('click', nextTopic);
+  if (item.status === "loading") {
+    doc.innerHTML =
+      "<div class=\"state-screen\">" +
+        "<div class=\"state-sub\">正在生成 <strong>" + esc(item.topic) + "</strong> 的内容…</div>" +
+        "<div class=\"skel\">" +
+          "<div class=\"skel-line h1\"></div>" +
+          "<div class=\"skel-line w100\"></div>" +
+          "<div class=\"skel-line w75\"></div>" +
+          "<div class=\"skel-line w100\"></div>" +
+          "<div class=\"skel-line w55\"></div>" +
+          "<div class=\"skel-line w100\"></div>" +
+          "<div class=\"skel-line w40\"></div>" +
+        "</div>" +
+      "</div>";
+    return;
+  }
 
-        // Init
-        renderQueuePanel();
-    </script>
+  if (item.status === "done") {
+    doc.innerHTML = item.htmlContent || "";
+    runScripts(doc);
+    document.getElementById("content-scroll").scrollTo({ top: 0, behavior: "smooth" });
+    return;
+  }
+
+  if (item.status === "error") {
+    doc.innerHTML =
+      "<div class=\"state-screen\">" +
+        "<div class=\"err-box\">" +
+          "<p>生成失败：" + esc(item.errorMsg || "未知错误") + "</p>" +
+          "<button class=\"retry-btn\" onclick=\"generateSelected()\">重试</button>" +
+        "</div>" +
+      "</div>";
+    return;
+  }
+}
+
+// ════════════════════════════════════════
+//  GENERATE
+// ════════════════════════════════════════
+async function generateSelected() {
+  if (selId === null) return;
+  var item = findItem(selId);
+  if (!item || item.status === "loading") return;
+
+  item.status = "loading";
+  item.htmlContent = null;
+  item.errorMsg = null;
+  renderSidebar();
+  renderMain();
+  saveState();
+
+  try {
+    var res = await fetch("/api/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ topic: item.topic, isRecursive: item.isRecursive })
+    });
+    if (!res.ok) {
+      var e = await res.json().catch(function() { return { detail: "未知错误" }; });
+      throw new Error(e.detail || "请求失败 (" + res.status + ")");
+    }
+    var data = await res.json();
+    if (!data.htmlContent) throw new Error("生成内容为空");
+    item.status = "done";
+    item.htmlContent = data.htmlContent;
+  } catch(err) {
+    item.status = "error";
+    item.errorMsg = err.message;
+  }
+
+  renderSidebar();
+  if (selId === item.id) renderMain();
+  saveState();
+}
+
+// ════════════════════════════════════════
+//  ADD / SELECT / DELETE
+// ════════════════════════════════════════
+function addItem(topic, isRecursive) {
+  topic = topic.trim();
+  if (!topic) return;
+
+  // Enforce MAX: evict oldest done, otherwise oldest non-loading
+  if (items.length >= MAX) {
+    var evictIdx = -1;
+    for (var i = items.length - 1; i >= 0; i--) {
+      if (items[i].status === "done")    { evictIdx = i; break; }
+    }
+    if (evictIdx < 0) {
+      for (var i = items.length - 1; i >= 0; i--) {
+        if (items[i].status !== "loading") { evictIdx = i; break; }
+      }
+    }
+    if (evictIdx >= 0) {
+      if (items[evictIdx].id === selId) selId = null;
+      items.splice(evictIdx, 1);
+    }
+  }
+
+  var it = {
+    id: nextId++,
+    topic: topic,
+    isRecursive: !!isRecursive,
+    status: "pending",
+    htmlContent: null,
+    errorMsg: null,
+    ts: Date.now()
+  };
+  items.unshift(it);
+  selId = it.id;
+
+  renderSidebar();
+  renderMain();
+  saveState();
+  generateSelected();
+}
+
+function selectItem(id) {
+  selId = id;
+  renderSidebar();
+  renderMain();
+  saveState();
+}
+
+function delItem(e, id) {
+  e.stopPropagation();
+  items = items.filter(function(it) { return it.id !== id; });
+  if (selId === id) selId = items.length > 0 ? items[0].id : null;
+  renderSidebar();
+  renderMain();
+  saveState();
+}
+
+function handleAdd() {
+  var inp = document.getElementById("topic-input");
+  var v = inp.value.trim();
+  if (v) { addItem(v, false); inp.value = ""; }
+}
+
+document.getElementById("topic-input").addEventListener("keypress", function(e) {
+  if (e.key === "Enter") { e.preventDefault(); handleAdd(); }
+});
+
+// ════════════════════════════════════════
+//  FLOAT SELECT-TO-QUEUE BUTTON
+// ════════════════════════════════════════
+var floatBtn = document.getElementById("float-btn");
+
+function hideFloat() { floatBtn.style.display = "none"; }
+
+function floatClick() {
+  var text = floatBtn.dataset.seltext;
+  if (text) addItem(text, true);
+  hideFloat();
+  window.getSelection().removeAllRanges();
+}
+
+document.getElementById("content-scroll").addEventListener("mouseup", function() {
+  setTimeout(function() {
+    var sel = window.getSelection();
+    var text = sel ? sel.toString().trim() : "";
+    if (!text || !sel || sel.rangeCount === 0) { hideFloat(); return; }
+    var range = sel.getRangeAt(0);
+    var doc = document.getElementById("content-doc");
+    if (!doc || !doc.contains(range.commonAncestorContainer)) { hideFloat(); return; }
+
+    var rect = range.getBoundingClientRect();
+    var mainEl = document.getElementById("main");
+    var mr = mainEl.getBoundingClientRect();
+
+    floatBtn.style.display = "block";
+    floatBtn.style.left = (rect.left - mr.left + rect.width / 2 - 48) + "px";
+    floatBtn.style.top  = (rect.bottom - mr.top + 6) + "px";
+    floatBtn.dataset.seltext = text;
+  }, 10);
+});
+
+document.addEventListener("mousedown", function(e) {
+  if (e.target !== floatBtn) hideFloat();
+});
+
+// ════════════════════════════════════════
+//  GLOBAL QUIZ HANDLER
+//  (AI content uses onclick="quizPick(this,'correct')" — no script tag needed)
+// ════════════════════════════════════════
+window.quizPick = function(el, type) {
+  var block = el.closest(".quiz-block");
+  if (!block || block.dataset.done) return;
+  block.dataset.done = "1";
+  block.querySelectorAll(".quiz-option").forEach(function(o) {
+    o.style.pointerEvents = "none";
+  });
+  el.classList.add(type === "correct" ? "correct" : "wrong");
+  var fbClass = type === "correct" ? ".quiz-feedback.ok" : ".quiz-feedback.err";
+  var fb = block.querySelector(fbClass);
+  if (fb) fb.classList.add("show");
+};
+
+// ════════════════════════════════════════
+//  INIT
+// ════════════════════════════════════════
+loadState();
+applyTheme();
+renderSidebar();
+renderMain();
+</script>
 </body>
 </html>
 """
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 def get_cache_key(topic: str, is_recursive: bool) -> str:
-    raw = f"{topic}|{is_recursive}"
-    return hashlib.md5(raw.encode()).hexdigest()
+    return hashlib.md5(f"{topic}|{is_recursive}".encode()).hexdigest()
 
 
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return HTML_TEMPLATE
@@ -925,54 +1203,38 @@ async def generate(req: Request):
     if not topic or not isinstance(topic, str):
         return JSONResponse({"detail": "缺少 topic 参数"}, status_code=400)
 
-    # 检查缓存
     cache_key = get_cache_key(topic, is_recursive)
-    if cache_key in cache:
-        return JSONResponse({"htmlContent": cache[cache_key]})
+    if cache_key in _cache:
+        return JSONResponse({"htmlContent": _cache[cache_key]})
 
-    # ── 系统提示词（黑白蓝主题 + 互动内容） ──
-    system_prompt = """你是一个出色的自适应学习内容生成器，专门生成结构清晰、视觉一致、富含互动元素的学习页面。
+    # ── System Prompt ──────────────────────────────────────────────────────
+    system_prompt = """你是一个出色的自适应学习内容生成器，生成结构清晰、富含互动元素的学习页面HTML片段。
 
-页面运行在已设计好的黑白蓝主题界面中，已定义好以下 CSS 变量和样式类（你只需使用，无需重定义）：
-- 颜色变量：--black, --dark, --mid, --border, --muted, --blue, --blue-hi, --blue-bg, --blue-dim, --white, --dim
-- 字体：'Syne'（标题）、'Inter'（正文）、'JetBrains Mono'（代码/标签）
-- 内置样式：h1, h2, h3, p, ul, ol, code, pre, blockquote, details/summary, hr
-- 互动组件类（见下方说明）
+页面已有完整设计系统，请严格使用以下CSS变量和类，禁止用内联style定义颜色或字体：
 
-【输出格式】
-严格输出 JSON：{"htmlContent": "..."}
-htmlContent 是 HTML 片段，不含 <html>/<body> 等外层标签。
+CSS变量（深色/浅色主题自动切换）：
+  --bg, --surface, --raised, --bd, --bd-hi
+  --t1（主文）、--t2（次文）、--t3（弱文）
+  --acc（强调蓝）、--acc-bg、--acc-bd
+  --grn、--grn-bg、--red、--red-bg、--amb、--amb-bg
+字体变量：--font-ui（IBM Plex Mono）、--font-body（IBM Plex Sans）、--font-head（Barlow Condensed）
 
-【内容结构要求】
-1. 第一行必须是 <h1>主题名称</h1>，简洁概括。
-2. 核心概念用 <h2> 分节，每节有 <p> 解释。
-3. 技术术语用 <code> 标注，多行代码用 <pre><code>。
-4. 适当使用 <ul>/<ol> 列表、<blockquote> 引用。
-5. 可折叠补充内容用 <details><summary>标题</summary>内容</details>。
+内置样式的标签（直接使用，无需额外class）：
+h1 h2 h3 p ul ol li code pre blockquote hr details/summary
 
-【互动元素（必须在每篇内容中至少使用 2 种）】
+互动组件（CSS已内置，按模板使用）：
 
-A. 单选测验 — 用于知识检测，每次只放 1 道：
+【A. 单选测验】每篇至少1道，用全局函数 quizPick(el, 'correct'|'wrong')，不要定义此函数：
 <div class="quiz-block">
   <div class="quiz-q">❓ 问题文字</div>
-  <div class="quiz-option" onclick="quizPick(this,'correct')">A. 正确答案</div>
-  <div class="quiz-option" onclick="quizPick(this,'wrong')">B. 错误选项</div>
-  <div class="quiz-option" onclick="quizPick(this,'wrong')">C. 错误选项</div>
-  <div class="quiz-feedback ok">✅ 正确！解释为何正确（1句话）</div>
-  <div class="quiz-feedback err">❌ 错误。正确答案是A，因为…</div>
+  <div class="quiz-option" onclick="quizPick(this,'correct')">A. 正确答案文字</div>
+  <div class="quiz-option" onclick="quizPick(this,'wrong')">B. 错误选项文字</div>
+  <div class="quiz-option" onclick="quizPick(this,'wrong')">C. 错误选项文字</div>
+  <div class="quiz-feedback ok">✅ 正确！一句话解释原因。</div>
+  <div class="quiz-feedback err">❌ 错误。正确答案是A，因为……</div>
 </div>
-<script>
-function quizPick(el, type) {
-  const block = el.closest('.quiz-block');
-  if (block.dataset.done) return;
-  block.dataset.done = '1';
-  block.querySelectorAll('.quiz-option').forEach(o => o.style.pointerEvents='none');
-  el.classList.add(type === 'correct' ? 'correct' : 'wrong');
-  block.querySelector('.quiz-feedback.' + (type==='correct'?'ok':'err')).classList.add('show');
-}
-</script>
 
-B. 翻转闪卡 — 用于关键概念记忆，可放多张：
+【B. 翻转闪卡】每篇至少2张，用内联onclick，不需要script标签：
 <div class="flashcard-wrap">
   <div class="flashcard" onclick="this.classList.toggle('flipped')">
     <div class="flashcard-front">正面：概念或问题</div>
@@ -981,22 +1243,28 @@ B. 翻转闪卡 — 用于关键概念记忆，可放多张：
   <div class="flashcard-hint">点击翻转</div>
 </div>
 
-C. 关键术语标签 — 行内展示核心词汇：
-<p>核心概念包括 <span class="term-card">术语A</span> 和 <span class="term-card">术语B</span>。</p>
+【C. 可折叠深度内容】用details/summary（已内置样式）：
+<details><summary>展开了解更多：副标题</summary><p>补充内容…</p></details>
 
-D. 章节导航胶囊 — 页面顶部列出各章节（纯装饰性，无需跳转）：
+【D. 关键术语标签】行内使用：
+文中关键词用 <span class="term-card">术语</span> 标注（每篇3-6个）
+
+【E. 章节导航】放在h1之后、正文之前：
 <div class="chapter-nav">
   <span class="chapter-pill active">§1 简介</span>
-  <span class="chapter-pill">§2 原理</span>
+  <span class="chapter-pill">§2 核心概念</span>
   <span class="chapter-pill">§3 应用</span>
 </div>
 
-【内容策略】
-- 递归模式（isRecursive=true）：聚焦解释该主题本身，内容自足，不引入额外未解释概念。长度 300–600 字。闪卡 1–2 张，测验 1 道。
-- 初始模式（isRecursive=false）：可适当展开背景、应用与对比。长度 600–1200 字。闪卡 2–3 张，测验 1–2 道，至少 1 个 <details> 折叠区块。
-- 所有内容使用中文，代码和专有术语保留英文原文。
-- 禁止在 htmlContent 中定义已存在的 CSS 类（如 .quiz-block, .flashcard 等），禁止重写颜色变量。
-- 每道测验只写一组 quizPick 函数（用 <script> 包裹，可复用已有函数名）。
+【输出规则】
+1. 严格输出JSON：{"htmlContent": "..."}
+2. 首行必须是 <h1>主题名</h1>，紧接chapter-nav
+3. 禁止包含<script>标签（flashcard和quiz的onclick均用内联，quizPick已全局定义）
+4. 禁止重定义任何CSS变量或已有class
+5. 禁止使用内联style设置颜色、字体（可用内联style设置宽度/margin等布局属性）
+6. 所有文字内容用中文，代码和专有名词保留英文
+7. 递归模式（isRecursive=true）：聚焦主题本身，内容自足，300-600字，闪卡1-2张，测验1道
+8. 初始模式（isRecursive=false）：展开背景+原理+应用，600-1200字，闪卡2-3张，测验1-2道，details至少1个
 """
 
     user_prompt = f"主题：{topic}\n递归模式：{'是' if is_recursive else '否'}\n请生成JSON。"
@@ -1006,30 +1274,29 @@ D. 章节导航胶囊 — 页面顶部列出各章节（纯装饰性，无需跳
             model="deepseek-v4-pro",
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user",   "content": user_prompt}
+                {"role": "user",   "content": user_prompt},
             ],
             response_format={"type": "json_object"},
             extra_body={"thinking": {"type": "enabled"}},
             max_tokens=4096,
         )
-        raw_content = response.choices[0].message.content.strip()
-        result = json.loads(raw_content)
+        raw = response.choices[0].message.content.strip()
+        result = json.loads(raw)
         html_content = result.get("htmlContent", "")
         if not html_content:
             raise ValueError("模型返回的 htmlContent 为空")
-        cache[cache_key] = html_content
+        _cache[cache_key] = html_content
         return JSONResponse({"htmlContent": html_content})
 
     except json.JSONDecodeError:
-        if raw_content:
+        if raw:
             try:
-                start = raw_content.find('{')
-                end   = raw_content.rfind('}')
-                if start != -1 and end != -1:
-                    result = json.loads(raw_content[start:end+1])
+                s, e = raw.find("{"), raw.rfind("}")
+                if s != -1 and e != -1:
+                    result = json.loads(raw[s:e+1])
                     html_content = result.get("htmlContent", "")
                     if html_content:
-                        cache[cache_key] = html_content
+                        _cache[cache_key] = html_content
                         return JSONResponse({"htmlContent": html_content})
             except Exception:
                 pass
