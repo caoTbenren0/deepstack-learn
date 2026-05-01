@@ -18,7 +18,7 @@ _cache: dict = {}
 # ---------------------------------------------------------------------------
 # HTML TEMPLATE
 # ---------------------------------------------------------------------------
-HTML_TEMPLATE = """<!DOCTYPE html>
+HTML_TEMPLATE = r"""<!DOCTYPE html>
 <html lang="zh-CN" data-theme="dark">
 <head>
 <meta charset="UTF-8">
