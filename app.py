@@ -8,8 +8,19 @@ import uvicorn
 
 app = FastAPI()
 
+CONFIG_PATH = os.getenv("APP_CONFIG_PATH", "config.json")
+
+
+def load_api_key() -> str | None:
+    if os.path.exists(CONFIG_PATH):
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        return config.get("api_key")
+    return None
+
+
 client = openai.OpenAI(
-    api_key=os.getenv("DEEPSEEK_API_KEY"),
+    api_key=load_api_key(),
     base_url="https://api.deepseek.com/v1",
 )
 
