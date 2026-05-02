@@ -28,7 +28,7 @@ client = openai.OpenAI(
     base_url="https://api.deepseek.com/v1",
 )
 
-_cache: dict = {}
+_cache: dict[str, dict] = {}
 
 # ---------------------------------------------------------------------------
 # HTML TEMPLATE
@@ -1419,8 +1419,8 @@ async function refreshBalance() {
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def get_cache_key(topic: str, is_recursive: bool) -> str:
-    return hashlib.md5(f"{topic}|{is_recursive}".encode()).hexdigest()
+def get_cache_key(topic: str, is_recursive: bool, vocab_context: str = "") -> str:
+    return hashlib.md5(f"{topic}|{is_recursive}|{vocab_context}".encode()).hexdigest()
 
 
 def normalize_records_payload(payload: dict | None) -> dict:
@@ -1462,9 +1462,9 @@ async def generate(req: Request):
         return JSONResponse({"detail": "缺少 topic 参数"}, status_code=400)
 
     vocab_context = body.get("vocabContext", "")
-    cache_key = get_cache_key(topic + "|" + vocab_context, is_recursive)
+    cache_key = get_cache_key(topic, is_recursive, vocab_context)
     if cache_key in _cache:
-        return JSONResponse({"htmlContent": _cache[cache_key]})
+        return JSONResponse(_cache[cache_key])
 
     # ── System Prompt ──────────────────────────────────────────────────────
     system_prompt = """你是一个出色的自适应学习内容生成器，生成结构清晰、富含互动元素的学习页面HTML片段。
@@ -1550,8 +1550,9 @@ h1 h2 h3 p ul ol li code pre blockquote hr details/summary
         if hasattr(msg, "reasoning_content"):
             thinking = msg.reasoning_content or ""
         title = gen_title_from_html(html_content)
-        _cache[cache_key] = html_content
-        return JSONResponse({"htmlContent": html_content, "thinking": thinking, "title": title})
+        payload = {"htmlContent": html_content, "thinking": thinking, "title": title}
+        _cache[cache_key] = payload
+        return JSONResponse(payload)
 
     except json.JSONDecodeError:
         if raw:
@@ -1561,8 +1562,9 @@ h1 h2 h3 p ul ol li code pre blockquote hr details/summary
                     result = json.loads(raw[s:e+1])
                     html_content = result.get("htmlContent", "")
                     if html_content:
-                        _cache[cache_key] = html_content
-                        return JSONResponse({"htmlContent": html_content, "thinking": "", "title": gen_title_from_html(html_content)})
+                        payload = {"htmlContent": html_content, "thinking": "", "title": gen_title_from_html(html_content)}
+                        _cache[cache_key] = payload
+                        return JSONResponse(payload)
             except Exception:
                 pass
         return JSONResponse({"detail": "生成内容格式错误，请重试"}, status_code=500)
