@@ -1,14 +1,17 @@
 import os
 import json
 import hashlib
+import re
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 import openai
 import uvicorn
+import requests
 
 app = FastAPI()
 
 CONFIG_PATH = os.getenv("APP_CONFIG_PATH", "config.json")
+RECORDS_PATH = os.getenv("APP_RECORDS_PATH", "records.json")
 
 
 def load_api_key() -> str | None:
@@ -772,6 +775,7 @@ body {
 ═══════════════════════════════════════ */
 #mobile-menu-btn,
 #sidebar-mask { display: none; }
+#clarify-mask { display: none; }
 
 @media (max-width: 900px) {
   body { height: 100dvh; overflow: hidden; }
@@ -811,6 +815,7 @@ body {
     z-index: 1000;
   }
   body.sidebar-open #sidebar-mask { display: block; }
+  body.clarify-open #clarify-mask { display: block; }
 
   #main { width: 100%; }
   #topbar {
@@ -849,13 +854,17 @@ body {
   </div>
 
   <div class="sb-list-top">
-    <span class="list-label">全部记录</span>
+    <span class="list-label">学习记录</span>
     <span id="item-count">0 / 32</span>
   </div>
 
   <div id="item-list"></div>
+  <div style="padding:8px 12px;border-top:1px solid var(--bd);font-family:var(--font-ui);font-size:10px;color:var(--t3);">
+    API余额：<span id="api-balance">--</span>
+  </div>
 </div>
 <div id="sidebar-mask" onclick="closeSidebar()"></div>
+<div id="clarify-mask" onclick="closeClarifyPanel()" style="position:fixed;inset:0;background:rgba(0,0,0,.48);z-index:1200;"></div>
 
 <!-- ════════════ MAIN ════════════ -->
 <div id="main">
@@ -867,8 +876,19 @@ body {
   </div>
   <div id="content-scroll">
     <div id="content-doc"></div>
+    <button id="show-thinking-btn" class="gen-btn" style="display:none;margin-top:14px;" onclick="showThinking()">查看生成思考链</button>
   </div>
   <button id="float-btn" onclick="floatClick()">+ 加入队列</button>
+</div>
+<div id="clarify-panel" style="display:none;position:fixed;z-index:1201;left:50%;top:50%;transform:translate(-50%,-50%);width:min(92vw,520px);background:var(--surface);border:1px solid var(--bd);padding:14px;">
+  <div style="font-family:var(--font-head);font-size:16px;margin-bottom:8px;">主题可能有歧义</div>
+  <div id="clarify-topic" style="font-size:12px;color:var(--t2);margin-bottom:10px;"></div>
+  <div id="clarify-options" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px;"></div>
+  <input id="clarify-custom" placeholder="自行补充（可选）" style="width:100%;background:var(--bg);border:1px solid var(--bd);color:var(--t1);padding:8px 10px;margin-bottom:10px;">
+  <div style="display:flex;gap:8px;flex-wrap:wrap;">
+    <button class="gen-btn" style="margin:0;" onclick="submitClarifyCustom()">使用自行补充</button>
+    <button class="gen-btn" style="margin:0;background:var(--t3);" onclick="skipClarify()">跳过</button>
+  </div>
 </div>
 
 <script>
@@ -878,10 +898,11 @@ body {
 var STORE_KEY = "rlq_v4";
 var MAX = 32;
 
-var items      = [];   // {id,topic,isRecursive,status,htmlContent,errorMsg,ts}
+var items      = [];   // {id,topic,title,isRecursive,status,htmlContent,errorMsg,ts,thinking,vocabContext}
 var selId      = null; // selected item id
 var theme      = "dark";
 var nextId     = 1;
+var pendingTopic = null;
 
 
 function isMobile() {
@@ -899,6 +920,7 @@ function saveState() {
     return {
       id: it.id,
       topic: it.topic,
+      title: it.title || it.topic,
       isRecursive: it.isRecursive,
       status: (it.status === "loading") ? "pending" : it.status,
       htmlContent: it.htmlContent || null,
@@ -910,6 +932,27 @@ function saveState() {
     localStorage.setItem(STORE_KEY, JSON.stringify({
       items: toSave, selId: selId, theme: theme, nextId: nextId
     }));
+  } catch(e) {}
+}
+
+async function syncRecordsToServer() {
+  try {
+    await fetch("/api/records", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items: items, selId: selId, theme: theme, nextId: nextId })
+    });
+  } catch(e) {}
+}
+
+async function loadRecordsFromServer() {
+  try {
+    var res = await fetch("/api/records");
+    if (!res.ok) return;
+    var d = await res.json();
+    if (d && Array.isArray(d.items)) {
+      items = d.items; selId = d.selId; theme = d.theme || theme; nextId = d.nextId || nextId;
+    }
   } catch(e) {}
 }
 
@@ -991,7 +1034,7 @@ function renderSidebar() {
     return "<div class=\"item-row" + active + "\" onclick=\"selectItem(" + it.id + ")\">" +
       "<div class=\"" + dotCls + "\"></div>" +
       "<div class=\"item-body\">" +
-        "<div class=\"item-topic\">" + esc(it.topic) + "</div>" +
+        "<div class=\"item-topic\">" + esc(it.title || it.topic) + "</div>" +
         "<div class=\"item-meta\">" + tagHtml +
           "<span class=\"item-time\">" + relTime(it.ts) + "</span>" +
         "</div>" +
@@ -1073,10 +1116,12 @@ function renderMain() {
 
   if (item.status === "done") {
     doc.innerHTML = item.htmlContent || "";
+    document.getElementById("show-thinking-btn").style.display = item.thinking ? "inline-block" : "none";
     runScripts(doc);
     document.getElementById("content-scroll").scrollTo({ top: 0, behavior: "smooth" });
     return;
   }
+  document.getElementById("show-thinking-btn").style.display = "none";
 
   if (item.status === "error") {
     doc.innerHTML =
@@ -1109,7 +1154,7 @@ async function generateSelected() {
     var res = await fetch("/api/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ topic: item.topic, isRecursive: item.isRecursive })
+      body: JSON.stringify({ topic: item.topic, isRecursive: item.isRecursive, vocabContext: item.vocabContext || "" })
     });
     if (!res.ok) {
       var e = await res.json().catch(function() { return { detail: "未知错误" }; });
@@ -1119,6 +1164,9 @@ async function generateSelected() {
     if (!data.htmlContent) throw new Error("生成内容为空");
     item.status = "done";
     item.htmlContent = data.htmlContent;
+    item.thinking = data.thinking || "";
+    if (data.title) item.title = data.title;
+    refreshBalance();
   } catch(err) {
     item.status = "error";
     item.errorMsg = err.message;
@@ -1127,6 +1175,7 @@ async function generateSelected() {
   renderSidebar();
   if (selId === item.id) renderMain();
   saveState();
+  syncRecordsToServer();
 }
 
 // ════════════════════════════════════════
@@ -1156,6 +1205,7 @@ function addItem(topic, isRecursive) {
   var it = {
     id: nextId++,
     topic: topic,
+    title: topic,
     isRecursive: !!isRecursive,
     status: "pending",
     htmlContent: null,
@@ -1168,6 +1218,7 @@ function addItem(topic, isRecursive) {
   renderSidebar();
   renderMain();
   saveState();
+  syncRecordsToServer();
   generateSelected();
 }
 
@@ -1186,13 +1237,78 @@ function delItem(e, id) {
   renderSidebar();
   renderMain();
   saveState();
+  syncRecordsToServer();
 }
 
-function handleAdd() {
+function openClarifyPanel(topic, options) {
+  pendingTopic = topic;
+  document.getElementById("clarify-topic").textContent = "原主题：" + topic;
+  var box = document.getElementById("clarify-options");
+  box.innerHTML = "";
+  options.forEach(function(op) {
+    var btn = document.createElement("button");
+    btn.className = "gen-btn";
+    btn.style.margin = "0";
+    btn.style.textAlign = "left";
+    btn.textContent = op;
+    btn.onclick = function() { selectClarifyOption(op); };
+    box.appendChild(btn);
+  });
+  document.getElementById("clarify-custom").value = "";
+  document.getElementById("clarify-panel").style.display = "block";
+  document.body.classList.add("clarify-open");
+}
+
+function closeClarifyPanel() {
+  document.getElementById("clarify-panel").style.display = "none";
+  document.body.classList.remove("clarify-open");
+}
+
+function selectClarifyOption(val) {
+  if (!pendingTopic) return;
+  addItem(val, false);
+  closeClarifyPanel();
+  pendingTopic = null;
+}
+
+function submitClarifyCustom() {
+  if (!pendingTopic) return;
+  var custom = document.getElementById("clarify-custom").value.trim();
+  addItem(custom || pendingTopic, false);
+  closeClarifyPanel();
+  pendingTopic = null;
+}
+
+function skipClarify() {
+  if (!pendingTopic) return;
+  addItem(pendingTopic, false);
+  closeClarifyPanel();
+  pendingTopic = null;
+}
+
+async function handleAdd() {
   if (isMobile()) closeSidebar();
   var inp = document.getElementById("topic-input");
   var v = inp.value.trim();
-  if (v) { addItem(v, false); inp.value = ""; }
+  if (!v) return;
+  inp.value = "";
+  var options = [];
+  try {
+    var res = await fetch("/api/topic-clarify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ topic: v })
+    });
+    if (res.ok) {
+      var data = await res.json();
+      options = Array.isArray(data.options) ? data.options.slice(0, 5) : [];
+    }
+  } catch(e) {}
+  if (!options.length) {
+    addItem(v, false);
+    return;
+  }
+  openClarifyPanel(v, options);
 }
 
 document.getElementById("topic-input").addEventListener("keypress", function(e) {
@@ -1254,13 +1370,33 @@ window.quizPick = function(el, type) {
   if (fb) fb.classList.add("show");
 };
 
+function showThinking() {
+  var item = (selId !== null) ? findItem(selId) : null;
+  if (!item || !item.thinking) return;
+  alert(item.thinking);
+}
+
+async function refreshBalance() {
+  try {
+    var res = await fetch("/api/balance");
+    var d = await res.json();
+    document.getElementById("api-balance").textContent = d.balance || "--";
+  } catch(e) {
+    document.getElementById("api-balance").textContent = "--";
+  }
+}
+
 // ════════════════════════════════════════
 //  INIT
 // ════════════════════════════════════════
-loadState();
-applyTheme();
-renderSidebar();
-renderMain();
+(async function init() {
+  loadState();
+  await loadRecordsFromServer();
+  applyTheme();
+  renderSidebar();
+  renderMain();
+  refreshBalance();
+})();
 </script>
 </body>
 </html>
@@ -1294,7 +1430,8 @@ async def generate(req: Request):
     if not topic or not isinstance(topic, str):
         return JSONResponse({"detail": "缺少 topic 参数"}, status_code=400)
 
-    cache_key = get_cache_key(topic, is_recursive)
+    vocab_context = body.get("vocabContext", "")
+    cache_key = get_cache_key(topic + "|" + vocab_context, is_recursive)
     if cache_key in _cache:
         return JSONResponse({"htmlContent": _cache[cache_key]})
 
@@ -1358,7 +1495,8 @@ h1 h2 h3 p ul ol li code pre blockquote hr details/summary
 8. 初始模式（isRecursive=false）：展开背景+原理+应用，600-1200字，闪卡2-3张，测验1-2道，details至少1个
 """
 
-    user_prompt = f"主题：{topic}\n递归模式：{'是' if is_recursive else '否'}\n请生成JSON。"
+    level = recursive_level(topic) if is_recursive else 0
+    user_prompt = f"主题：{topic}\n递归模式：{'是' if is_recursive else '否'}\n{build_vocab_rule(level)}\n生词上下文：{vocab_context or '无'}\n请生成JSON。"
 
     try:
         response = client.chat.completions.create(
@@ -1371,13 +1509,18 @@ h1 h2 h3 p ul ol li code pre blockquote hr details/summary
             extra_body={"thinking": {"type": "enabled"}},
             max_tokens=4096,
         )
-        raw = response.choices[0].message.content.strip()
+        msg = response.choices[0].message
+        raw = msg.content.strip()
         result = json.loads(raw)
         html_content = result.get("htmlContent", "")
         if not html_content:
             raise ValueError("模型返回的 htmlContent 为空")
+        thinking = ""
+        if hasattr(msg, "reasoning_content"):
+            thinking = msg.reasoning_content or ""
+        title = gen_title_from_html(html_content)
         _cache[cache_key] = html_content
-        return JSONResponse({"htmlContent": html_content})
+        return JSONResponse({"htmlContent": html_content, "thinking": thinking, "title": title})
 
     except json.JSONDecodeError:
         if raw:
@@ -1388,7 +1531,7 @@ h1 h2 h3 p ul ol li code pre blockquote hr details/summary
                     html_content = result.get("htmlContent", "")
                     if html_content:
                         _cache[cache_key] = html_content
-                        return JSONResponse({"htmlContent": html_content})
+                        return JSONResponse({"htmlContent": html_content, "thinking": "", "title": gen_title_from_html(html_content)})
             except Exception:
                 pass
         return JSONResponse({"detail": "生成内容格式错误，请重试"}, status_code=500)
@@ -1398,6 +1541,89 @@ h1 h2 h3 p ul ol li code pre blockquote hr details/summary
 
     except Exception as e:
         return JSONResponse({"detail": f"服务内部错误: {str(e)}"}, status_code=500)
+
+
+def recursive_level(topic: str) -> int:
+    return topic.count("（") + topic.count("(")
+
+
+def build_vocab_rule(level: int) -> str:
+    if level <= 0:
+        return "递归层级0：没有对生词的限制。"
+    if level == 1:
+        return "递归层级1：尽量减少生词，出现时要立即解释。"
+    if level == 2:
+        return "递归层级2：全局最多允许3个生词，并在首次出现处解释。"
+    return "递归层级3及以上：不得出现生词，必须只用常见表达。"
+
+
+def gen_title_from_html(html: str) -> str:
+    txt = re.sub(r"<[^>]+>", " ", html)
+    txt = re.sub(r"\s+", " ", txt).strip()
+    return (txt[:18] + "…") if len(txt) > 18 else txt
+
+@app.get("/api/records")
+async def get_records():
+    if not os.path.exists(RECORDS_PATH):
+        return JSONResponse({"items": [], "selId": None, "theme": "dark", "nextId": 1})
+    with open(RECORDS_PATH, "r", encoding="utf-8") as f:
+        return JSONResponse(json.load(f))
+
+
+@app.put("/api/records")
+async def put_records(req: Request):
+    payload = await req.json()
+    with open(RECORDS_PATH, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False)
+    return JSONResponse({"ok": True})
+
+
+@app.get("/api/balance")
+async def get_balance():
+    api_key = load_api_key()
+    if not api_key:
+        return JSONResponse({"balance": "--"})
+    try:
+        r = requests.get("https://api.deepseek.com/user/balance", headers={"Authorization": f"Bearer {api_key}"}, timeout=8)
+        data = r.json()
+        bal = str(data.get("balance_infos", [{}])[0].get("total_balance", "--"))
+        return JSONResponse({"balance": bal})
+    except Exception:
+        return JSONResponse({"balance": "--"})
+
+
+@app.post("/api/topic-clarify")
+async def topic_clarify(req: Request):
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"options": []})
+    topic = (body.get("topic") or "").strip()
+    if not topic:
+        return JSONResponse({"options": []})
+    prompt = (
+        "你需要判断用户主题是否可能存在多种常见含义。"
+        "返回JSON：{\"options\":[\"候选1\",...]}\n"
+        "规则：1) 最多5个；2) 仅返回与该主题可能混淆的不同语境表达；"
+        "3) 若无明显歧义返回空数组；4) 所有选项简洁。"
+        f"\n主题：{topic}"
+    )
+    try:
+        response = client.chat.completions.create(
+            model="deepseek-v4-pro",
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
+            max_tokens=300,
+        )
+        raw = response.choices[0].message.content.strip()
+        data = json.loads(raw)
+        options = data.get("options") if isinstance(data, dict) else []
+        if not isinstance(options, list):
+            options = []
+        options = [str(x).strip() for x in options if str(x).strip()][:5]
+        return JSONResponse({"options": options})
+    except Exception:
+        return JSONResponse({"options": []})
 
 
 if __name__ == "__main__":
