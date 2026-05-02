@@ -765,6 +765,71 @@ body {
   box-shadow: 0 2px 8px rgba(0,0,0,.35);
 }
 #float-btn:hover { opacity: .88; }
+
+
+/* ═══════════════════════════════════════
+   MOBILE ADAPTATION
+═══════════════════════════════════════ */
+#mobile-menu-btn,
+#sidebar-mask { display: none; }
+
+@media (max-width: 900px) {
+  body { height: 100dvh; overflow: hidden; }
+
+  #mobile-menu-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border: 1px solid var(--bd);
+    background: var(--bg);
+    color: var(--t2);
+    font-family: var(--font-ui);
+    font-size: 14px;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  #sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: min(86vw, 320px);
+    transform: translateX(-100%);
+    transition: transform .2s ease;
+    z-index: 1001;
+    border-right: 1px solid var(--bd);
+  }
+  body.sidebar-open #sidebar { transform: translateX(0); }
+
+  #sidebar-mask {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.48);
+    z-index: 1000;
+  }
+  body.sidebar-open #sidebar-mask { display: block; }
+
+  #main { width: 100%; }
+  #topbar {
+    padding: 0 12px;
+    height: 44px;
+  }
+  #top-topic { font-size: 13px; }
+  #top-status { font-size: 8px; }
+
+  #content-scroll {
+    padding: 18px 14px 24px;
+  }
+
+  #content-doc h1 { font-size: 1.6rem; }
+  #content-doc h2 { font-size: 1.05rem; }
+
+  .item-del { display: block; }
+}
+
 </style>
 </head>
 <body>
@@ -790,10 +855,12 @@ body {
 
   <div id="item-list"></div>
 </div>
+<div id="sidebar-mask" onclick="closeSidebar()"></div>
 
 <!-- ════════════ MAIN ════════════ -->
 <div id="main">
   <div id="topbar">
+    <button id="mobile-menu-btn" onclick="toggleSidebar()">☰</button>
     <div id="top-dot"></div>
     <div id="top-topic">选择或添加主题开始学习</div>
     <div id="top-status">—</div>
@@ -815,6 +882,17 @@ var items      = [];   // {id,topic,isRecursive,status,htmlContent,errorMsg,ts}
 var selId      = null; // selected item id
 var theme      = "dark";
 var nextId     = 1;
+
+
+function isMobile() {
+  return window.matchMedia("(max-width: 900px)").matches;
+}
+function toggleSidebar() {
+  document.body.classList.toggle("sidebar-open");
+}
+function closeSidebar() {
+  document.body.classList.remove("sidebar-open");
+}
 
 function saveState() {
   var toSave = items.map(function(it) {
@@ -1094,6 +1172,7 @@ function addItem(topic, isRecursive) {
 }
 
 function selectItem(id) {
+  if (isMobile()) closeSidebar();
   selId = id;
   renderSidebar();
   renderMain();
@@ -1110,6 +1189,7 @@ function delItem(e, id) {
 }
 
 function handleAdd() {
+  if (isMobile()) closeSidebar();
   var inp = document.getElementById("topic-input");
   var v = inp.value.trim();
   if (v) { addItem(v, false); inp.value = ""; }
