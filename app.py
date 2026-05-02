@@ -776,6 +776,7 @@ body {
 ═══════════════════════════════════════ */
 #mobile-menu-btn,
 #sidebar-mask { display: none; }
+#clarify-mask { display: none; }
 
 @media (max-width: 900px) {
   body { height: 100dvh; overflow: hidden; }
@@ -815,6 +816,7 @@ body {
     z-index: 1000;
   }
   body.sidebar-open #sidebar-mask { display: block; }
+  body.clarify-open #clarify-mask { display: block; }
 
   #main { width: 100%; }
   #topbar {
@@ -863,6 +865,7 @@ body {
   </div>
 </div>
 <div id="sidebar-mask" onclick="closeSidebar()"></div>
+<div id="clarify-mask" onclick="closeClarifyPanel()" style="position:fixed;inset:0;background:rgba(0,0,0,.48);z-index:1200;"></div>
 
 <!-- ════════════ MAIN ════════════ -->
 <div id="main">
@@ -878,6 +881,16 @@ body {
   </div>
   <button id="float-btn" onclick="floatClick()">+ 加入队列</button>
 </div>
+<div id="clarify-panel" style="display:none;position:fixed;z-index:1201;left:50%;top:50%;transform:translate(-50%,-50%);width:min(92vw,520px);background:var(--surface);border:1px solid var(--bd);padding:14px;">
+  <div style="font-family:var(--font-head);font-size:16px;margin-bottom:8px;">主题可能有歧义</div>
+  <div id="clarify-topic" style="font-size:12px;color:var(--t2);margin-bottom:10px;"></div>
+  <div id="clarify-options" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px;"></div>
+  <input id="clarify-custom" placeholder="自行补充（可选）" style="width:100%;background:var(--bg);border:1px solid var(--bd);color:var(--t1);padding:8px 10px;margin-bottom:10px;">
+  <div style="display:flex;gap:8px;flex-wrap:wrap;">
+    <button class="gen-btn" style="margin:0;" onclick="submitClarifyCustom()">使用自行补充</button>
+    <button class="gen-btn" style="margin:0;background:var(--t3);" onclick="skipClarify()">跳过</button>
+  </div>
+</div>
 
 <script>
 // ════════════════════════════════════════
@@ -890,6 +903,7 @@ var items      = [];   // {id,topic,title,isRecursive,status,htmlContent,errorMs
 var selId      = null; // selected item id
 var theme      = "dark";
 var nextId     = 1;
+var pendingTopic = null;
 
 
 function isMobile() {
@@ -1239,18 +1253,75 @@ function delItem(e, id) {
   syncRecordsToServer();
 }
 
+function openClarifyPanel(topic, options) {
+  pendingTopic = topic;
+  document.getElementById("clarify-topic").textContent = "原主题：" + topic;
+  var box = document.getElementById("clarify-options");
+  box.innerHTML = "";
+  options.forEach(function(op) {
+    var btn = document.createElement("button");
+    btn.className = "gen-btn";
+    btn.style.margin = "0";
+    btn.style.textAlign = "left";
+    btn.textContent = op;
+    btn.onclick = function() { selectClarifyOption(op); };
+    box.appendChild(btn);
+  });
+  document.getElementById("clarify-custom").value = "";
+  document.getElementById("clarify-panel").style.display = "block";
+  document.body.classList.add("clarify-open");
+}
+
+function closeClarifyPanel() {
+  document.getElementById("clarify-panel").style.display = "none";
+  document.body.classList.remove("clarify-open");
+}
+
+function selectClarifyOption(val) {
+  if (!pendingTopic) return;
+  addItem(val, false);
+  closeClarifyPanel();
+  pendingTopic = null;
+}
+
+function submitClarifyCustom() {
+  if (!pendingTopic) return;
+  var custom = document.getElementById("clarify-custom").value.trim();
+  addItem(custom || pendingTopic, false);
+  closeClarifyPanel();
+  pendingTopic = null;
+}
+
+function skipClarify() {
+  if (!pendingTopic) return;
+  addItem(pendingTopic, false);
+  closeClarifyPanel();
+  pendingTopic = null;
+}
+
 async function handleAdd() {
   if (isMobile()) closeSidebar();
   var inp = document.getElementById("topic-input");
   var v = inp.value.trim();
   if (!v) return;
-  var choice = prompt("可选同义词（输入1/2/3），输入0跳过，输入其它文本=自行补充。\n1) "+v+"（技术语境）\n2) "+v+"（生活语境）\n3) "+v+"（学术语境）");
-  var finalTopic = v;
-  if (choice === "1") finalTopic = v + "（技术语境）";
-  else if (choice === "2") finalTopic = v + "（生活语境）";
-  else if (choice === "3") finalTopic = v + "（学术语境）";
-  else if (choice && choice !== "0") finalTopic = choice;
-  addItem(finalTopic, false); inp.value = "";
+  inp.value = "";
+  var options = [];
+  try {
+    var res = await fetch("/api/topic-clarify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ topic: v })
+    });
+    if (res.ok) {
+      var data = await res.json();
+      options = Array.isArray(data.options) ? data.options.slice(0, 5) : [];
+    }
+  } catch(e) {}
+  if (!options.length) {
+    addItem(v, false);
+    return;
+  }
+  openClarifyPanel(v, options);
 }
 
 document.getElementById("topic-input").addEventListener("keypress", function(e) {
@@ -1550,6 +1621,40 @@ async def get_balance():
         return JSONResponse({"balance": bal})
     except Exception:
         return JSONResponse({"balance": "--"})
+
+
+@app.post("/api/topic-clarify")
+async def topic_clarify(req: Request):
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"options": []})
+    topic = (body.get("topic") or "").strip()
+    if not topic:
+        return JSONResponse({"options": []})
+    prompt = (
+        "你需要判断用户主题是否可能存在多种常见含义。"
+        "返回JSON：{\"options\":[\"候选1\",...]}\n"
+        "规则：1) 最多5个；2) 仅返回与该主题可能混淆的不同语境表达；"
+        "3) 若无明显歧义返回空数组；4) 所有选项简洁。"
+        f"\n主题：{topic}"
+    )
+    try:
+        response = client.chat.completions.create(
+            model="deepseek-v4-pro",
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
+            max_tokens=300,
+        )
+        raw = response.choices[0].message.content.strip()
+        data = json.loads(raw)
+        options = data.get("options") if isinstance(data, dict) else []
+        if not isinstance(options, list):
+            options = []
+        options = [str(x).strip() for x in options if str(x).strip()][:5]
+        return JSONResponse({"options": options})
+    except Exception:
+        return JSONResponse({"options": []})
 
 
 if __name__ == "__main__":
