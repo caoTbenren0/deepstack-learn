@@ -12,6 +12,7 @@ app = FastAPI()
 
 CONFIG_PATH = os.getenv("APP_CONFIG_PATH", "config.json")
 RECORDS_PATH = os.getenv("APP_RECORDS_PATH", "records.json")
+MAX_RECENT_PAGES = 64
 
 
 def load_api_key() -> str | None:
@@ -896,7 +897,7 @@ body {
 //  STATE & PERSISTENCE
 // ════════════════════════════════════════
 var STORE_KEY = "rlq_v4";
-var MAX = 32;
+var MAX = 64;
 
 var items      = [];   // {id,topic,title,isRecursive,status,htmlContent,errorMsg,ts,thinking,vocabContext}
 var selId      = null; // selected item id
@@ -915,7 +916,16 @@ function closeSidebar() {
   document.body.classList.remove("sidebar-open");
 }
 
+function trimItemsToMax() {
+  if (items.length <= MAX) return;
+  items = items.slice(0, MAX);
+  if (selId !== null && !findItem(selId)) {
+    selId = items.length > 0 ? items[0].id : null;
+  }
+}
+
 function saveState() {
+  trimItemsToMax();
   var toSave = items.map(function(it) {
     return {
       id: it.id,
@@ -936,6 +946,7 @@ function saveState() {
 }
 
 async function syncRecordsToServer() {
+  trimItemsToMax();
   try {
     await fetch("/api/records", {
       method: "PUT",
@@ -952,6 +963,7 @@ async function loadRecordsFromServer() {
     var d = await res.json();
     if (d && Array.isArray(d.items)) {
       items = d.items; selId = d.selId; theme = d.theme || theme; nextId = d.nextId || nextId;
+      trimItemsToMax();
     }
   } catch(e) {}
 }
@@ -965,6 +977,7 @@ function loadState() {
     selId  = (d.selId !== undefined) ? d.selId : null;
     theme  = d.theme  || "dark";
     nextId = d.nextId || items.length + 1;
+    trimItemsToMax();
   } catch(e) {}
 }
 
@@ -1410,6 +1423,24 @@ def get_cache_key(topic: str, is_recursive: bool) -> str:
     return hashlib.md5(f"{topic}|{is_recursive}".encode()).hexdigest()
 
 
+def normalize_records_payload(payload: dict | None) -> dict:
+    if not isinstance(payload, dict):
+        return {"items": [], "selId": None, "theme": "dark", "nextId": 1}
+
+    items = payload.get("items") if isinstance(payload.get("items"), list) else []
+    items = items[:MAX_RECENT_PAGES]
+    sel_id = payload.get("selId")
+    if sel_id is not None and not any(it.get("id") == sel_id for it in items if isinstance(it, dict)):
+        sel_id = items[0].get("id") if items and isinstance(items[0], dict) else None
+
+    next_id = payload.get("nextId")
+    if not isinstance(next_id, int) or next_id <= 0:
+        next_id = len(items) + 1
+
+    theme = payload.get("theme") if isinstance(payload.get("theme"), str) else "dark"
+    return {"items": items, "selId": sel_id, "theme": theme, "nextId": next_id}
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -1567,12 +1598,12 @@ async def get_records():
     if not os.path.exists(RECORDS_PATH):
         return JSONResponse({"items": [], "selId": None, "theme": "dark", "nextId": 1})
     with open(RECORDS_PATH, "r", encoding="utf-8") as f:
-        return JSONResponse(json.load(f))
+        return JSONResponse(normalize_records_payload(json.load(f)))
 
 
 @app.put("/api/records")
 async def put_records(req: Request):
-    payload = await req.json()
+    payload = normalize_records_payload(await req.json())
     with open(RECORDS_PATH, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False)
     return JSONResponse({"ok": True})
