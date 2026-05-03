@@ -852,7 +852,7 @@ body {
       <button id="add-btn">+ 添加</button>
     </div>
     <div style="margin-top:8px;font-size:11px;color:var(--t2);font-family:var(--font-ui);display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-      <span id="force-interview-hint">已改为：直接生成，按需澄清</span>
+      <span id="force-interview-hint"></span>
     </div>
   </div>
 
@@ -1017,7 +1017,7 @@ function renderForceInterviewState() {
   var toggle = document.getElementById("force-interview-toggle");
   var hint = document.getElementById("force-interview-hint");
   if (toggle) toggle.checked = false;
-  if (hint) hint.textContent = "已改为：直接生成，按需澄清";
+  if (hint) hint.textContent = "";
 }
 function toggleForceInterview(checked) {
   forceInterview = !!checked;
@@ -1821,7 +1821,7 @@ h1 h2 h3 p ul ol li code pre blockquote hr details/summary
 
 互动组件（CSS已内置，按模板使用）：
 
-【A. 单选测验】每篇至少1道，用全局函数 quizPick(el, 'correct'|'wrong')，不要定义此函数：
+【A. 单选测验】按需生成，用全局函数 quizPick(el, 'correct'|'wrong')，不要定义此函数：
 <div class="quiz-block">
   <div class="quiz-q">❓ 问题文字</div>
   <button class="quiz-option" type="button" data-answer="correct">A. 正确答案文字</button>
@@ -1831,7 +1831,7 @@ h1 h2 h3 p ul ol li code pre blockquote hr details/summary
   <div class="quiz-feedback err">❌ 错误。正确答案是A，因为……</div>
 </div>
 
-【B. 翻转闪卡】每篇至少2张，使用 .flashcard 元素（点击行为由全局事件代理处理）：
+【B. 翻转闪卡】按需生成，使用 .flashcard 元素（点击行为由全局事件代理处理）：
 <div class="flashcard-wrap">
   <div class="flashcard" role="button" tabindex="0" aria-label="翻转闪卡">
     <div class="flashcard-front">正面：概念或问题</div>
@@ -1840,11 +1840,11 @@ h1 h2 h3 p ul ol li code pre blockquote hr details/summary
   <div class="flashcard-hint">点击翻转</div>
 </div>
 
-【C. 可折叠深度内容】用details/summary（已内置样式）：
+【C. 可折叠深度内容】按需使用details/summary（已内置样式）：
 <details><summary>展开了解更多：副标题</summary><p>补充内容…</p></details>
 
 【D. 关键术语标签】行内使用：
-文中关键词用 <span class="term-card">术语</span> 标注（每篇3-6个）
+文中关键词可用 <span class="term-card">术语</span> 标注（按需使用）
 
 【E. 章节导航】放在h1之后、正文之前：
 <div class="chapter-nav">
@@ -1856,12 +1856,12 @@ h1 h2 h3 p ul ol li code pre blockquote hr details/summary
 【输出规则】
 1. 严格输出JSON：{"htmlContent": "..."}
 2. 首行必须是 <h1>主题名</h1>，紧接chapter-nav
-3. 禁止包含<script>标签，交互通过 data-answer 与 .flashcard 事件代理完成
+3. 允许使用更多HTML内容；若有必要可包含安全、简短的<script>函数以增强交互
 4. 禁止重定义任何CSS变量或已有class
 5. 禁止使用内联style设置颜色、字体（可用内联style设置宽度/margin等布局属性）
 6. 所有文字内容用中文，代码和专有名词保留英文
-7. 递归模式（isRecursive=true）：聚焦主题本身，内容自足，300-600字，闪卡1-2张，测验1道
-8. 初始模式（isRecursive=false）：展开背景+原理+应用，600-1200字，闪卡2-3张，测验1-2道，details至少1个
+7. 递归模式（isRecursive=true）：聚焦主题本身，内容自足，300-600字，互动组件按需生成
+8. 初始模式（isRecursive=false）：展开背景+原理+应用，600-1200字，互动组件按需生成
 9. 若用户主题或上下文存在关键歧义，先不要生成正文，返回 options 包（2-5个候选）
 """
 
@@ -1904,7 +1904,7 @@ h1 h2 h3 p ul ol li code pre blockquote hr details/summary
         thinking = ""
         if hasattr(msg, "reasoning_content"):
             thinking = msg.reasoning_content or ""
-        title = gen_title_from_html(html_content)
+        title = topic if not is_recursive else gen_title_from_html(topic, html_content)
         payload = {"htmlContent": html_content, "thinking": thinking, "title": title}
         _cache[cache_key] = payload
         return JSONResponse(payload)
@@ -1919,7 +1919,8 @@ h1 h2 h3 p ul ol li code pre blockquote hr details/summary
                     result = json.loads(raw[s:e+1])
                     html_content = result.get("htmlContent", "")
                     if html_content:
-                        payload = {"htmlContent": html_content, "thinking": "", "title": gen_title_from_html(html_content)}
+                        title = topic if not is_recursive else gen_title_from_html(topic, html_content)
+                        payload = {"htmlContent": html_content, "thinking": "", "title": title}
                         _cache[cache_key] = payload
                         return JSONResponse(payload)
             except Exception:
@@ -1949,11 +1950,34 @@ def build_vocab_rule(level: int) -> str:
     return "递归层级3及以上：不得出现生词，必须只用常见表达。"
 
 
-def gen_title_from_html(html: str) -> str:
-    """流程名：标题摘要流程｜从 HTML 文本中抽取简短标题。"""
-    txt = re.sub(r"<[^>]+>", " ", html)
-    txt = re.sub(r"\s+", " ", txt).strip()
-    return (txt[:18] + "…") if len(txt) > 18 else txt
+def gen_title_from_html(topic: str, html: str) -> str:
+    """流程名：标题拟订流程｜根据学习主题与HTML生成<=12字标题。"""
+    system_prompt = (
+        "你是标题拟订助手。"
+        "请根据用户学习主题与htmlContent生成一个不超过12个字的中文标题。"
+        "只返回JSON：{\"title\":\"...\"}。"
+    )
+    user_prompt = f"学习主题：{topic}\nhtmlContent：{html}"
+    try:
+        response = client.chat.completions.create(
+            model="deepseek-v4-pro",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            response_format={"type": "json_object"},
+            extra_body={"thinking": {"type": "disabled"}},
+            max_tokens=128,
+        )
+        raw = (response.choices[0].message.content or "").strip()
+        result = json.loads(raw)
+        title = str(result.get("title", "")).strip()
+        if title:
+            return title[:12]
+    except Exception:
+        pass
+    fallback = re.sub(r"\s+", " ", (topic or "").strip())
+    return fallback[:12] or "学习主题"
 
 def parse_json_object_from_text(raw: str) -> dict:
     """流程名：JSON恢复流程｜从模型文本中提取首个JSON对象。"""
