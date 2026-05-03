@@ -16,6 +16,7 @@ MAX_RECENT_PAGES = 64
 
 
 def load_api_key() -> str | None:
+    """流程A：读取本地配置并提取 API Key。"""
     if os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             config = json.load(f)
@@ -1420,10 +1421,12 @@ async function refreshBalance() {
 # Helpers
 # ---------------------------------------------------------------------------
 def get_cache_key(topic: str, is_recursive: bool, vocab_context: str = "") -> str:
+    """流程B：为一次生成请求构建稳定缓存键。"""
     return hashlib.md5(f"{topic}|{is_recursive}|{vocab_context}".encode()).hexdigest()
 
 
 def normalize_records_payload(payload: dict | None) -> dict:
+    """流程C：标准化前端记录数据，保障字段完整且合法。"""
     if not isinstance(payload, dict):
         return {"items": [], "selId": None, "theme": "dark", "nextId": 1}
 
@@ -1451,6 +1454,8 @@ async def index():
 
 @app.post("/api/generate")
 async def generate(req: Request):
+    """主流程D：内容生成管线（校验 -> 缓存 -> 组 Prompt -> 调模型 -> 解析返回）。"""
+    # 步骤 D1：解析并校验请求体。
     try:
         body = await req.json()
     except Exception:
@@ -1461,11 +1466,13 @@ async def generate(req: Request):
     if not topic or not isinstance(topic, str):
         return JSONResponse({"detail": "缺少 topic 参数"}, status_code=400)
 
+    # 步骤 D2：计算缓存键并执行命中短路。
     vocab_context = body.get("vocabContext", "")
     cache_key = get_cache_key(topic, is_recursive, vocab_context)
     if cache_key in _cache:
         return JSONResponse(_cache[cache_key])
 
+    # 步骤 D3：准备系统提示词模板。
     # ── System Prompt ──────────────────────────────────────────────────────
     system_prompt = """你是一个出色的自适应学习内容生成器，生成结构清晰、富含互动元素的学习页面HTML片段。
 
@@ -1526,9 +1533,11 @@ h1 h2 h3 p ul ol li code pre blockquote hr details/summary
 8. 初始模式（isRecursive=false）：展开背景+原理+应用，600-1200字，闪卡2-3张，测验1-2道，details至少1个
 """
 
+    # 步骤 D4：根据递归层级构造用户提示词。
     level = recursive_level(topic) if is_recursive else 0
     user_prompt = f"主题：{topic}\n递归模式：{'是' if is_recursive else '否'}\n{build_vocab_rule(level)}\n生词上下文：{vocab_context or '无'}\n请生成JSON。"
 
+    # 步骤 D5：调用模型并解析标准 JSON 返回。
     try:
         response = client.chat.completions.create(
             model="deepseek-v4-pro",
@@ -1555,6 +1564,7 @@ h1 h2 h3 p ul ol li code pre blockquote hr details/summary
         return JSONResponse(payload)
 
     except json.JSONDecodeError:
+        # 步骤 D6（降级）：尝试从包裹文本中抽取 JSON。
         if raw:
             try:
                 s, e = raw.find("{"), raw.rfind("}")
@@ -1577,10 +1587,12 @@ h1 h2 h3 p ul ol li code pre blockquote hr details/summary
 
 
 def recursive_level(topic: str) -> int:
+    """流程E：通过括号层数估算递归深度。"""
     return topic.count("（") + topic.count("(")
 
 
 def build_vocab_rule(level: int) -> str:
+    """流程F：按递归层级生成生词约束规则。"""
     if level <= 0:
         return "递归层级0：没有对生词的限制。"
     if level == 1:
@@ -1591,12 +1603,14 @@ def build_vocab_rule(level: int) -> str:
 
 
 def gen_title_from_html(html: str) -> str:
+    """流程G：从 HTML 文本提取短标题用于侧边栏展示。"""
     txt = re.sub(r"<[^>]+>", " ", html)
     txt = re.sub(r"\s+", " ", txt).strip()
     return (txt[:18] + "…") if len(txt) > 18 else txt
 
 @app.get("/api/records")
 async def get_records():
+    """流程H：读取并返回学习记录。"""
     if not os.path.exists(RECORDS_PATH):
         return JSONResponse({"items": [], "selId": None, "theme": "dark", "nextId": 1})
     with open(RECORDS_PATH, "r", encoding="utf-8") as f:
@@ -1605,6 +1619,7 @@ async def get_records():
 
 @app.put("/api/records")
 async def put_records(req: Request):
+    """流程I：接收并持久化学习记录。"""
     payload = normalize_records_payload(await req.json())
     with open(RECORDS_PATH, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False)
@@ -1613,6 +1628,7 @@ async def put_records(req: Request):
 
 @app.get("/api/balance")
 async def get_balance():
+    """流程J：查询并返回 DeepSeek 账户余额。"""
     api_key = load_api_key()
     if not api_key:
         return JSONResponse({"balance": "--"})
@@ -1627,6 +1643,7 @@ async def get_balance():
 
 @app.post("/api/topic-clarify")
 async def topic_clarify(req: Request):
+    """流程K：检测主题歧义并给出候选释义。"""
     try:
         body = await req.json()
     except Exception:
