@@ -852,11 +852,7 @@ body {
       <button id="add-btn">+ 添加</button>
     </div>
     <div style="margin-top:8px;font-size:11px;color:var(--t2);font-family:var(--font-ui);display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-      <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
-        <input type="checkbox" id="force-interview-toggle">
-        <span>强制先追问3问</span>
-      </label>
-      <span id="force-interview-hint">未开启</span>
+      <span id="force-interview-hint">已改为：直接生成，按需澄清</span>
     </div>
   </div>
 
@@ -935,7 +931,7 @@ var selId      = null; // selected item id
 var theme      = "dark";
 var nextId     = 1;
 var pendingTopic = null;
-var forceInterview = false;
+var forceInterview = false; // deprecated
 var pendingClarifyOptions = [];
 var pendingClarifyThinking = "";
 
@@ -1020,8 +1016,8 @@ function loadState() {
 function renderForceInterviewState() {
   var toggle = document.getElementById("force-interview-toggle");
   var hint = document.getElementById("force-interview-hint");
-  if (toggle) toggle.checked = !!forceInterview;
-  if (hint) hint.textContent = forceInterview ? "已开启：所有主题先追问3问" : "未开启";
+  if (toggle) toggle.checked = false;
+  if (hint) hint.textContent = "已改为：直接生成，按需澄清";
 }
 function toggleForceInterview(checked) {
   forceInterview = !!checked;
@@ -1265,6 +1261,12 @@ async function generateSelected() {
       throw new Error(e.detail || "请求失败 (" + res.status + ")");
     }
     var data = await res.json();
+    if (Array.isArray(data.options) && data.options.length) {
+      item.status = "pending";
+      pendingClarifyThinking = data.thinking || "";
+      openClarifyPanel(item.topic, data.options.slice(0,5));
+      return;
+    }
     if (!data.htmlContent) throw new Error("生成内容为空");
     item.status = "done";
     item.htmlContent = data.htmlContent;
@@ -1372,7 +1374,13 @@ function closeClarifyPanel() {
 
 function selectClarifyOption(val) {
   if (!pendingTopic) return;
-  addItem(val, false, null, pendingClarifyThinking);
+  var it = (selId !== null) ? findItem(selId) : null;
+  if (!it) return;
+  it.learningContext = it.learningContext || {};
+  it.learningContext.clarifyHistory = Array.isArray(it.learningContext.clarifyHistory) ? it.learningContext.clarifyHistory : [];
+  it.learningContext.clarifyHistory.push({type:"option", value: val});
+  it.status = "pending"; it.errorMsg = null; it.topic = pendingTopic;
+  renderSidebar(); renderMain(); generateSelected();
   closeClarifyPanel();
   pendingTopic = null;
   pendingClarifyThinking = "";
@@ -1381,7 +1389,13 @@ function selectClarifyOption(val) {
 function submitClarifyCustom() {
   if (!pendingTopic) return;
   var custom = document.getElementById("clarify-custom").value.trim();
-  addItem(custom || pendingTopic, false, null, pendingClarifyThinking);
+  var it = (selId !== null) ? findItem(selId) : null;
+  if (!it) return;
+  it.learningContext = it.learningContext || {};
+  it.learningContext.clarifyHistory = Array.isArray(it.learningContext.clarifyHistory) ? it.learningContext.clarifyHistory : [];
+  it.learningContext.clarifyHistory.push({type:"custom", value: (custom || pendingTopic)});
+  it.status = "pending"; it.errorMsg = null; it.topic = pendingTopic;
+  renderSidebar(); renderMain(); generateSelected();
   closeClarifyPanel();
   pendingTopic = null;
   pendingClarifyThinking = "";
@@ -1478,36 +1492,7 @@ async function handleAdd() {
   var v = inp.value.trim();
   if (!v) return;
   inp.value = "";
-  var options = [];
-  var clarifyThinking = "";
-  try {
-    var res = await fetch("/api/topic-clarify", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ topic: v })
-    });
-    if (res.ok) {
-      var data = await res.json();
-      options = Array.isArray(data.options) ? data.options.slice(0, 5) : [];
-      clarifyThinking = (typeof data.thinking === "string") ? data.thinking : "";
-    } else {
-      var errPayload = await res.json().catch(function() { return {}; });
-      console.warn("topic-clarify failed", res.status, errPayload.detail || "");
-    }
-  } catch(e) {
-    console.warn("topic-clarify exception", e);
-  }
-  pendingClarifyThinking = clarifyThinking;
-  pendingClarifyOptions = options.slice(0, 5);
-  if (forceInterview) {
-    openInterviewPanel(v, options);
-    return;
-  }
-  if (!options.length) {
-    addItem(v, false, null, clarifyThinking);
-    return;
-  }
-  openClarifyPanel(v, options);
+  addItem(v, false, { clarifyHistory: [] }, "");
 }
 
 document.getElementById("topic-input").addEventListener("keypress", function(e) {
@@ -1566,7 +1551,7 @@ function floatClick() {
 
 document.getElementById("theme-btn").addEventListener("click", toggleTheme);
 document.getElementById("add-btn").addEventListener("click", handleAdd);
-document.getElementById("force-interview-toggle").addEventListener("change", function(e) { toggleForceInterview(e.target.checked); });
+
 document.getElementById("sidebar-mask").addEventListener("click", closeSidebar);
 document.getElementById("mobile-menu-btn").addEventListener("click", toggleSidebar);
 document.getElementById("show-thinking-btn").addEventListener("click", showThinking);
@@ -1805,10 +1790,12 @@ h1 h2 h3 p ul ol li code pre blockquote hr details/summary
 6. 所有文字内容用中文，代码和专有名词保留英文
 7. 递归模式（isRecursive=true）：聚焦主题本身，内容自足，300-600字，闪卡1-2张，测验1道
 8. 初始模式（isRecursive=false）：展开背景+原理+应用，600-1200字，闪卡2-3张，测验1-2道，details至少1个
+9. 若用户主题或上下文存在关键歧义，先不要生成正文，返回 options 包（2-5个候选）
 """
 
     # 步骤 D4：根据递归层级构造用户提示词。
     level = recursive_level(topic) if is_recursive else 0
+    clarify_history = learning_context.get("clarifyHistory", []) if isinstance(learning_context, dict) else []
     interview_context = "无"
     if learning_context:
         interview_context = (
@@ -1817,7 +1804,7 @@ h1 h2 h3 p ul ol li code pre blockquote hr details/summary
             f"问题2：{learning_context.get('q2') or '未填写'}；"
             f"问题3：{learning_context.get('q3') or '未填写'}"
         )
-    user_prompt = f"主题：{topic}\n递归模式：{'是' if is_recursive else '否'}\n{build_vocab_rule(level)}\n生词上下文：{vocab_context or '无'}\n学习者追问上下文：{interview_context}\n请生成JSON。"
+    user_prompt = f"主题：{topic}\n递归模式：{'是' if is_recursive else '否'}\n{build_vocab_rule(level)}\n生词上下文：{vocab_context or '无'}\n学习者追问上下文：{interview_context}\n历史澄清上下文：{json.dumps(clarify_history, ensure_ascii=False)}\n若仍有歧义请返回 options 包，否则返回 htmlContent 包。"
 
     # 步骤 D5：调用模型并解析标准 JSON 返回。
     try:
@@ -1834,9 +1821,14 @@ h1 h2 h3 p ul ol li code pre blockquote hr details/summary
         msg = response.choices[0].message
         raw = msg.content.strip()
         result = json.loads(raw)
+        options = result.get("options") if isinstance(result, dict) else None
+        if isinstance(options, list) and options:
+            options = [str(x).strip() for x in options if str(x).strip()][:5]
+            if options:
+                return JSONResponse({"options": options, "thinking": getattr(msg, "reasoning_content", "") or ""})
         html_content = result.get("htmlContent", "")
         if not html_content:
-            raise ValueError("模型返回的 htmlContent 为空")
+            raise ValueError("模型返回内容既非htmlContent也非options")
         thinking = ""
         if hasattr(msg, "reasoning_content"):
             thinking = msg.reasoning_content or ""
