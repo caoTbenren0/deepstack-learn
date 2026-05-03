@@ -1264,6 +1264,10 @@ async function generateSelected() {
     if (Array.isArray(data.options) && data.options.length) {
       item.status = "pending";
       pendingClarifyThinking = data.thinking || "";
+      renderSidebar();
+      if (selId === item.id) renderMain();
+      saveState();
+      syncRecordsToServer();
       openClarifyPanel(item.topic, data.options.slice(0,5));
       return;
     }
