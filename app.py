@@ -883,6 +883,10 @@ body {
   <div id="content-scroll">
     <div id="content-doc"></div>
     <button id="show-thinking-btn" class="gen-btn" style="display:none;margin-top:14px;">查看生成思考链</button>
+    <details id="thinking-panel" style="display:none;margin-top:10px;">
+      <summary>生成思考链（只读）</summary>
+      <pre id="thinking-text" style="white-space:pre-wrap;background:var(--bg);border:1px solid var(--bd);padding:10px;font-family:var(--font-ui);font-size:12px;"></pre>
+    </details>
     <button id="show-clarify-thinking-btn" class="gen-btn" style="display:none;margin-top:14px;">查看歧义判断思考链</button>
     <details id="clarify-thinking-panel" style="display:none;margin-top:10px;">
       <summary>歧义判断思考链（只读）</summary>
@@ -1121,12 +1125,17 @@ function setTopbar(topic, status) {
 function renderMain() {
   var doc = document.getElementById("content-doc");
   var item = (selId !== null) ? findItem(selId) : null;
+  var thinkingBtn = document.getElementById("show-thinking-btn");
+  var thinkingPanel = document.getElementById("thinking-panel");
+  var thinkingText = document.getElementById("thinking-text");
   var clarifyBtn = document.getElementById("show-clarify-thinking-btn");
   var clarifyPanel = document.getElementById("clarify-thinking-panel");
   var clarifyText = document.getElementById("clarify-thinking-text");
 
   if (!item) {
-    document.getElementById("show-thinking-btn").style.display = "none";
+    thinkingBtn.style.display = "none";
+    thinkingPanel.style.display = "none";
+    thinkingPanel.open = false;
     clarifyBtn.style.display = "none";
     clarifyPanel.style.display = "none";
     clarifyPanel.open = false;
@@ -1149,7 +1158,9 @@ function renderMain() {
   setTopbar(item.topic, item.status);
 
   if (item.status === "pending") {
-    document.getElementById("show-thinking-btn").style.display = "none";
+    thinkingBtn.style.display = "none";
+    thinkingPanel.style.display = "none";
+    thinkingPanel.open = false;
     clarifyBtn.style.display = "inline-block";
     clarifyPanel.style.display = "none";
     clarifyPanel.open = false;
@@ -1164,7 +1175,9 @@ function renderMain() {
   }
 
   if (item.status === "loading") {
-    document.getElementById("show-thinking-btn").style.display = "none";
+    thinkingBtn.style.display = "none";
+    thinkingPanel.style.display = "none";
+    thinkingPanel.open = false;
     clarifyBtn.style.display = "none";
     clarifyPanel.style.display = "none";
     clarifyPanel.open = false;
@@ -1186,7 +1199,10 @@ function renderMain() {
 
   if (item.status === "done") {
     doc.innerHTML = item.htmlContent || "";
-    document.getElementById("show-thinking-btn").style.display = item.thinking ? "inline-block" : "none";
+    thinkingBtn.style.display = item.thinking ? "inline-block" : "none";
+    thinkingPanel.style.display = "none";
+    thinkingPanel.open = false;
+    thinkingText.textContent = item.thinking || "该次未返回思考链";
     clarifyBtn.style.display = "inline-block";
     clarifyPanel.style.display = "none";
     clarifyPanel.open = false;
@@ -1195,7 +1211,9 @@ function renderMain() {
     document.getElementById("content-scroll").scrollTo({ top: 0, behavior: "smooth" });
     return;
   }
-  document.getElementById("show-thinking-btn").style.display = "none";
+  thinkingBtn.style.display = "none";
+  thinkingPanel.style.display = "none";
+  thinkingPanel.open = false;
   clarifyBtn.style.display = "none";
   clarifyPanel.style.display = "none";
   clarifyPanel.open = false;
@@ -1572,8 +1590,12 @@ document.getElementById("content-doc").addEventListener("click", function(e) {
 
 function showThinking() {
   var item = (selId !== null) ? findItem(selId) : null;
-  if (!item || !item.thinking) return;
-  alert(item.thinking);
+  if (!item) return;
+  var panel = document.getElementById("thinking-panel");
+  var text = document.getElementById("thinking-text");
+  text.textContent = item.thinking || "该次未返回思考链";
+  panel.style.display = "block";
+  panel.open = !panel.open;
 }
 
 function toggleClarifyThinking() {
