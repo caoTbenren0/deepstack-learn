@@ -1490,9 +1490,15 @@ async function handleAdd() {
       var data = await res.json();
       options = Array.isArray(data.options) ? data.options.slice(0, 5) : [];
       clarifyThinking = (typeof data.thinking === "string") ? data.thinking : "";
+    } else {
+      var errPayload = await res.json().catch(function() { return {}; });
+      console.warn("topic-clarify failed", res.status, errPayload.detail || "");
     }
-  } catch(e) {}
+  } catch(e) {
+    console.warn("topic-clarify exception", e);
+  }
   pendingClarifyThinking = clarifyThinking;
+  pendingClarifyOptions = options.slice(0, 5);
   if (forceInterview) {
     openInterviewPanel(v, options);
     return;
@@ -1885,6 +1891,25 @@ def gen_title_from_html(html: str) -> str:
     txt = re.sub(r"\s+", " ", txt).strip()
     return (txt[:18] + "…") if len(txt) > 18 else txt
 
+def parse_json_object_from_text(raw: str) -> dict:
+    """流程名：JSON恢复流程｜从模型文本中提取首个JSON对象。"""
+    text = (raw or "").strip()
+    if not text:
+        return {}
+    try:
+        obj = json.loads(text)
+        return obj if isinstance(obj, dict) else {}
+    except Exception:
+        pass
+    s, e = text.find("{"), text.rfind("}")
+    if s != -1 and e != -1 and e > s:
+        try:
+            obj = json.loads(text[s:e+1])
+            return obj if isinstance(obj, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
 @app.get("/api/records")
 async def get_records():
     """流程名：学习记录读取流程｜读取并归一化持久化状态。"""
@@ -1918,6 +1943,12 @@ async def get_balance():
         return JSONResponse({"balance": "--"})
 
 
+@app.api_route("/api/topic-clarify", methods=["GET", "HEAD"])
+async def topic_clarify_probe():
+    """流程名：主题消歧探活流程｜用于探针请求，避免 GET/HEAD 405 告警。"""
+    return JSONResponse({"ok": True, "method": "POST", "detail": "Use POST with JSON body: {\"topic\": \"...\"}"})
+
+
 @app.post("/api/topic-clarify")
 async def topic_clarify(req: Request):
     """流程名：主题消歧流程｜识别主题歧义并返回候选语境。"""
@@ -1946,8 +1977,7 @@ async def topic_clarify(req: Request):
             max_tokens=300,
         )
         msg = response.choices[0].message
-        raw = msg.content.strip()
-        data = json.loads(raw)
+        data = parse_json_object_from_text((msg.content or ""))
         options = data.get("options") if isinstance(data, dict) else []
         if not isinstance(options, list):
             options = []
@@ -1956,8 +1986,10 @@ async def topic_clarify(req: Request):
         if hasattr(msg, "reasoning_content"):
             thinking = msg.reasoning_content or ""
         return JSONResponse({"options": options, "thinking": thinking})
-    except Exception:
-        return JSONResponse({"options": [], "thinking": ""})
+    except openai.APIError as e:
+        return JSONResponse({"options": [], "thinking": "", "detail": f"API调用失败: {e}"}, status_code=502)
+    except Exception as e:
+        return JSONResponse({"options": [], "thinking": "", "detail": f"服务内部错误: {str(e)}"}, status_code=500)
 
 
 @app.post("/api/interview-options")
