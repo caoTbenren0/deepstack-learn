@@ -777,7 +777,6 @@ body {
 ═══════════════════════════════════════ */
 #mobile-menu-btn,
 #sidebar-mask { display: none; }
-#clarify-mask { display: none; }
 
 @media (max-width: 900px) {
   body { height: 100dvh; overflow: hidden; }
@@ -817,7 +816,6 @@ body {
     z-index: 1000;
   }
   body.sidebar-open #sidebar-mask { display: block; }
-  body.clarify-open #clarify-mask { display: block; }
 
   #main { width: 100%; }
   #topbar {
@@ -845,17 +843,17 @@ body {
 <div id="sidebar">
   <div class="sb-top">
     <span class="brand">递归<em>·</em>学习</span>
-    <button id="theme-btn" onclick="toggleTheme()">LIGHT</button>
+    <button id="theme-btn">LIGHT</button>
   </div>
 
   <div class="sb-add">
     <div class="add-row">
       <input type="text" id="topic-input" placeholder="输入主题，回车添加" autocomplete="off">
-      <button id="add-btn" onclick="handleAdd()">+ 添加</button>
+      <button id="add-btn">+ 添加</button>
     </div>
     <div style="margin-top:8px;font-size:11px;color:var(--t2);font-family:var(--font-ui);display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
       <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
-        <input type="checkbox" id="force-interview-toggle" onchange="toggleForceInterview(this.checked)">
+        <input type="checkbox" id="force-interview-toggle">
         <span>强制先追问3问</span>
       </label>
       <span id="force-interview-hint">未开启</span>
@@ -872,30 +870,28 @@ body {
     API余额：<span id="api-balance">--</span>
   </div>
 </div>
-<div id="sidebar-mask" onclick="closeSidebar()"></div>
-<div id="clarify-mask" onclick="closeClarifyPanel()" style="position:fixed;inset:0;background:rgba(0,0,0,.48);z-index:1200;"></div>
-<div id="interview-mask" onclick="closeInterviewPanel()" style="position:fixed;inset:0;background:rgba(0,0,0,.48);z-index:1200;"></div>
+<div id="sidebar-mask"></div>
 
 <!-- ════════════ MAIN ════════════ -->
 <div id="main">
   <div id="topbar">
-    <button id="mobile-menu-btn" onclick="toggleSidebar()">☰</button>
+    <button id="mobile-menu-btn">☰</button>
     <div id="top-dot"></div>
     <div id="top-topic">选择或添加主题开始学习</div>
     <div id="top-status">—</div>
   </div>
   <div id="content-scroll">
     <div id="content-doc"></div>
-    <button id="show-thinking-btn" class="gen-btn" style="display:none;margin-top:14px;" onclick="showThinking()">查看生成思考链</button>
-    <button id="show-clarify-thinking-btn" class="gen-btn" style="display:none;margin-top:14px;" onclick="toggleClarifyThinking()">查看歧义判断思考链</button>
+    <button id="show-thinking-btn" class="gen-btn" style="display:none;margin-top:14px;">查看生成思考链</button>
+    <button id="show-clarify-thinking-btn" class="gen-btn" style="display:none;margin-top:14px;">查看歧义判断思考链</button>
     <details id="clarify-thinking-panel" style="display:none;margin-top:10px;">
       <summary>歧义判断思考链（只读）</summary>
       <pre id="clarify-thinking-text" style="white-space:pre-wrap;background:var(--bg);border:1px solid var(--bd);padding:10px;font-family:var(--font-ui);font-size:12px;"></pre>
     </details>
   </div>
-  <button id="float-btn" onclick="floatClick()">+ 加入队列</button>
+  <button id="float-btn">+ 加入队列</button>
 </div>
-<div id="interview-panel" style="display:none;position:fixed;z-index:1201;left:50%;top:50%;transform:translate(-50%,-50%);width:min(92vw,560px);background:var(--surface);border:1px solid var(--bd);padding:14px;">
+<dialog id="interview-panel" aria-modal="true" style="width:min(92vw,560px);background:var(--surface);border:1px solid var(--bd);padding:14px;">
   <div style="font-family:var(--font-head);font-size:16px;margin-bottom:8px;">学习前追问（三问）</div>
   <div id="interview-topic" style="font-size:12px;color:var(--t2);margin-bottom:10px;"></div>
   <div style="display:flex;flex-direction:column;gap:8px;">
@@ -904,18 +900,18 @@ body {
     <input id="interview-a3" placeholder="3) 你希望内容偏理论、实战还是速览？" style="width:100%;background:var(--bg);border:1px solid var(--bd);color:var(--t1);padding:8px 10px;">
   </div>
   <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
-    <button class="gen-btn" style="margin:0;" onclick="submitInterviewAnswers()">确认并添加</button>
-    <button class="gen-btn" style="margin:0;background:var(--t3);" onclick="closeInterviewPanel()">取消</button>
+    <button id="interview-submit-btn" class="gen-btn" style="margin:0;">确认并添加</button>
+    <button id="interview-cancel-btn" class="gen-btn" style="margin:0;background:var(--t3);">取消</button>
   </div>
 </div>
-<div id="clarify-panel" style="display:none;position:fixed;z-index:1201;left:50%;top:50%;transform:translate(-50%,-50%);width:min(92vw,520px);background:var(--surface);border:1px solid var(--bd);padding:14px;">
+<dialog id="clarify-panel" aria-modal="true" style="width:min(92vw,520px);background:var(--surface);border:1px solid var(--bd);padding:14px;">
   <div style="font-family:var(--font-head);font-size:16px;margin-bottom:8px;">主题可能有歧义</div>
   <div id="clarify-topic" style="font-size:12px;color:var(--t2);margin-bottom:10px;"></div>
   <div id="clarify-options" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px;"></div>
   <input id="clarify-custom" placeholder="自行补充（可选）" style="width:100%;background:var(--bg);border:1px solid var(--bd);color:var(--t1);padding:8px 10px;margin-bottom:10px;">
   <div style="display:flex;gap:8px;flex-wrap:wrap;">
-    <button class="gen-btn" style="margin:0;" onclick="submitClarifyCustom()">使用自行补充</button>
-    <button class="gen-btn" style="margin:0;background:var(--t3);" onclick="skipClarify()">跳过</button>
+    <button id="clarify-custom-btn" class="gen-btn" style="margin:0;">使用自行补充</button>
+    <button id="clarify-skip-btn" class="gen-btn" style="margin:0;background:var(--t3);">跳过</button>
   </div>
 </div>
 
@@ -1089,7 +1085,7 @@ function renderSidebar() {
       ? "<span class=\"tag tag-rec\">递归</span>"
       : "<span class=\"tag\">初始</span>";
 
-    return "<div class=\"item-row" + active + "\" onclick=\"selectItem(" + it.id + ")\">" +
+    return "<div class=\"item-row" + active + "\" data-item-id=\"" + it.id + "\">" +
       "<div class=\"" + dotCls + "\"></div>" +
       "<div class=\"item-body\">" +
         "<div class=\"item-topic\">" + esc(it.title || it.topic) + "</div>" +
@@ -1097,7 +1093,7 @@ function renderSidebar() {
           "<span class=\"item-time\">" + relTime(it.ts) + "</span>" +
         "</div>" +
       "</div>" +
-      "<button class=\"item-del\" onclick=\"delItem(event," + it.id + ")\">×</button>" +
+      "<button class=\"item-del\" data-del-id=\"" + it.id + "\">×</button>" +
       "</div>";
   }).join("");
 }
@@ -1162,7 +1158,7 @@ function renderMain() {
       "<div class=\"state-screen\">" +
         "<div class=\"state-title\">" + esc(item.topic) + "</div>" +
         "<div class=\"state-sub\">内容尚未生成</div>" +
-        "<button class=\"gen-btn\" onclick=\"generateSelected()\">生成内容</button>" +
+        "<button id=\"generate-btn\" class=\"gen-btn\">生成内容</button>" +
       "</div>";
     return;
   }
@@ -1209,7 +1205,7 @@ function renderMain() {
       "<div class=\"state-screen\">" +
         "<div class=\"err-box\">" +
           "<p>生成失败：" + esc(item.errorMsg || "未知错误") + "</p>" +
-          "<button class=\"retry-btn\" onclick=\"generateSelected()\">重试</button>" +
+          "<button id=\"retry-btn\" class=\"retry-btn\">重试</button>" +
         "</div>" +
       "</div>";
     return;
@@ -1319,7 +1315,6 @@ function selectItem(id) {
 }
 
 function delItem(e, id) {
-  e.stopPropagation();
   items = items.filter(function(it) { return it.id !== id; });
   if (selId === id) selId = items.length > 0 ? items[0].id : null;
   renderSidebar();
@@ -1339,17 +1334,18 @@ function openClarifyPanel(topic, options) {
     btn.style.margin = "0";
     btn.style.textAlign = "left";
     btn.textContent = op;
-    btn.onclick = function() { selectClarifyOption(op); };
+    btn.type = "button";
+    btn.addEventListener("click", function() { selectClarifyOption(op); });
     box.appendChild(btn);
   });
+  var panel = document.getElementById("clarify-panel");
   document.getElementById("clarify-custom").value = "";
-  document.getElementById("clarify-panel").style.display = "block";
-  document.body.classList.add("clarify-open");
+  panel.showModal();
+  trapFocus(panel);
 }
 
 function closeClarifyPanel() {
-  document.getElementById("clarify-panel").style.display = "none";
-  document.body.classList.remove("clarify-open");
+  closeDialog(document.getElementById("clarify-panel"));
 }
 
 function selectClarifyOption(val) {
@@ -1389,13 +1385,13 @@ function openInterviewPanel(topic, clarifyOptions) {
   document.getElementById("interview-a1").value = "";
   document.getElementById("interview-a2").value = "";
   document.getElementById("interview-a3").value = "";
-  document.getElementById("interview-panel").style.display = "block";
-  document.body.classList.add("clarify-open");
+  var panel = document.getElementById("interview-panel");
+  panel.showModal();
+  trapFocus(panel);
 }
 
 function closeInterviewPanel() {
-  document.getElementById("interview-panel").style.display = "none";
-  document.body.classList.remove("clarify-open");
+  closeDialog(document.getElementById("interview-panel"));
 }
 
 function submitInterviewAnswers() {
@@ -1449,6 +1445,42 @@ document.getElementById("topic-input").addEventListener("keypress", function(e) 
   if (e.key === "Enter") { e.preventDefault(); handleAdd(); }
 });
 
+function closeDialog(panel) {
+  if (panel && panel.open) panel.close();
+}
+
+function trapFocus(panel) {
+  var focusables = panel.querySelectorAll("button, input, [href], select, textarea, [tabindex]:not([tabindex='-1'])");
+  if (!focusables.length) return;
+  focusables[0].focus();
+  panel.onkeydown = function(e) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      if (panel.id === "clarify-panel") closeClarifyPanel();
+      if (panel.id === "interview-panel") closeInterviewPanel();
+      return;
+    }
+    if (e.key === "Enter" && panel.id === "interview-panel") {
+      e.preventDefault();
+      submitInterviewAnswers();
+      return;
+    }
+    if (e.key === "Enter" && panel.id === "clarify-panel") {
+      e.preventDefault();
+      submitClarifyCustom();
+      return;
+    }
+    if (e.key !== "Tab") return;
+    var nodes = panel.querySelectorAll("button, input, [href], select, textarea, [tabindex]:not([tabindex='-1'])");
+    var first = nodes[0], last = nodes[nodes.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault(); last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault(); first.focus();
+    }
+  };
+}
+
 // ════════════════════════════════════════
 //  FLOAT SELECT-TO-QUEUE BUTTON
 // ════════════════════════════════════════
@@ -1462,6 +1494,32 @@ function floatClick() {
   hideFloat();
   window.getSelection().removeAllRanges();
 }
+
+document.getElementById("theme-btn").addEventListener("click", toggleTheme);
+document.getElementById("add-btn").addEventListener("click", handleAdd);
+document.getElementById("force-interview-toggle").addEventListener("change", function(e) { toggleForceInterview(e.target.checked); });
+document.getElementById("sidebar-mask").addEventListener("click", closeSidebar);
+document.getElementById("mobile-menu-btn").addEventListener("click", toggleSidebar);
+document.getElementById("show-thinking-btn").addEventListener("click", showThinking);
+document.getElementById("show-clarify-thinking-btn").addEventListener("click", toggleClarifyThinking);
+document.getElementById("float-btn").addEventListener("click", floatClick);
+document.getElementById("clarify-custom-btn").addEventListener("click", submitClarifyCustom);
+document.getElementById("clarify-skip-btn").addEventListener("click", skipClarify);
+document.getElementById("interview-submit-btn").addEventListener("click", submitInterviewAnswers);
+document.getElementById("interview-cancel-btn").addEventListener("click", closeInterviewPanel);
+document.getElementById("item-list").addEventListener("click", function(e) {
+  var delBtn = e.target.closest(".item-del");
+  if (delBtn) {
+    e.stopPropagation();
+    delItem(e, Number(delBtn.dataset.delId));
+    return;
+  }
+  var row = e.target.closest(".item-row");
+  if (row) selectItem(Number(row.dataset.itemId));
+});
+document.getElementById("content-doc").addEventListener("click", function(e) {
+  if (e.target.id === "generate-btn" || e.target.id === "retry-btn") generateSelected();
+});
 
 document.getElementById("content-scroll").addEventListener("mouseup", function() {
   setTimeout(function() {
@@ -1489,7 +1547,6 @@ document.addEventListener("mousedown", function(e) {
 
 // ════════════════════════════════════════
 //  GLOBAL QUIZ HANDLER
-//  (AI content uses onclick="quizPick(this,'correct')" — no script tag needed)
 // ════════════════════════════════════════
 window.quizPick = function(el, type) {
   var block = el.closest(".quiz-block");
@@ -1503,6 +1560,15 @@ window.quizPick = function(el, type) {
   var fb = block.querySelector(fbClass);
   if (fb) fb.classList.add("show");
 };
+document.getElementById("content-doc").addEventListener("click", function(e) {
+  var opt = e.target.closest(".quiz-option[data-answer]");
+  if (opt) {
+    window.quizPick(opt, opt.dataset.answer);
+    return;
+  }
+  var card = e.target.closest(".flashcard");
+  if (card) card.classList.toggle("flipped");
+});
 
 function showThinking() {
   var item = (selId !== null) ? findItem(selId) : null;
@@ -1628,16 +1694,16 @@ h1 h2 h3 p ul ol li code pre blockquote hr details/summary
 【A. 单选测验】每篇至少1道，用全局函数 quizPick(el, 'correct'|'wrong')，不要定义此函数：
 <div class="quiz-block">
   <div class="quiz-q">❓ 问题文字</div>
-  <div class="quiz-option" onclick="quizPick(this,'correct')">A. 正确答案文字</div>
-  <div class="quiz-option" onclick="quizPick(this,'wrong')">B. 错误选项文字</div>
-  <div class="quiz-option" onclick="quizPick(this,'wrong')">C. 错误选项文字</div>
+  <button class="quiz-option" type="button" data-answer="correct">A. 正确答案文字</button>
+  <button class="quiz-option" type="button" data-answer="wrong">B. 错误选项文字</button>
+  <button class="quiz-option" type="button" data-answer="wrong">C. 错误选项文字</button>
   <div class="quiz-feedback ok">✅ 正确！一句话解释原因。</div>
   <div class="quiz-feedback err">❌ 错误。正确答案是A，因为……</div>
 </div>
 
-【B. 翻转闪卡】每篇至少2张，用内联onclick，不需要script标签：
+【B. 翻转闪卡】每篇至少2张，使用 .flashcard 元素（点击行为由全局事件代理处理）：
 <div class="flashcard-wrap">
-  <div class="flashcard" onclick="this.classList.toggle('flipped')">
+  <div class="flashcard" role="button" tabindex="0" aria-label="翻转闪卡">
     <div class="flashcard-front">正面：概念或问题</div>
     <div class="flashcard-back">背面：定义或答案</div>
   </div>
@@ -1660,7 +1726,7 @@ h1 h2 h3 p ul ol li code pre blockquote hr details/summary
 【输出规则】
 1. 严格输出JSON：{"htmlContent": "..."}
 2. 首行必须是 <h1>主题名</h1>，紧接chapter-nav
-3. 禁止包含<script>标签（flashcard和quiz的onclick均用内联，quizPick已全局定义）
+3. 禁止包含<script>标签，交互通过 data-answer 与 .flashcard 事件代理完成
 4. 禁止重定义任何CSS变量或已有class
 5. 禁止使用内联style设置颜色、字体（可用内联style设置宽度/margin等布局属性）
 6. 所有文字内容用中文，代码和专有名词保留英文
