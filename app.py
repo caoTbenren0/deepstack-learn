@@ -1584,13 +1584,18 @@ document.getElementById("item-list").addEventListener("click", function(e) {
   if (row) selectItem(Number(row.dataset.itemId));
 });
 document.getElementById("content-doc").addEventListener("click", function(e) {
-  if (e.target.id === "generate-btn" || e.target.id === "retry-btn") generateSelected();
-  if (e.target.id === "open-clarify-btn") {
-    var current = (selId !== null) ? findItem(selId) : null;
-    if (current && Array.isArray(current.clarifyOptions) && current.clarifyOptions.length) {
-      pendingClarifyThinking = current.clarifyThinking || "";
-      openClarifyPanel(current.topic, current.clarifyOptions);
-    }
+  var actionBtn = e.target.closest("#generate-btn, #retry-btn, #open-clarify-btn");
+  if (!actionBtn) return;
+
+  if (actionBtn.id === "generate-btn" || actionBtn.id === "retry-btn") {
+    generateSelected();
+    return;
+  }
+
+  var current = (selId !== null) ? findItem(selId) : null;
+  if (current && Array.isArray(current.clarifyOptions) && current.clarifyOptions.length) {
+    pendingClarifyThinking = current.clarifyThinking || "";
+    openClarifyPanel(current.topic, current.clarifyOptions);
   }
 });
 
