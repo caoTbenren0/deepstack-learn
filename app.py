@@ -16,6 +16,7 @@ MAX_RECENT_PAGES = 64
 
 
 def load_api_key() -> str | None:
+    """流程名：配置加载流程｜读取本地配置并提取 API Key。"""
     if os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             config = json.load(f)
@@ -1420,10 +1421,12 @@ async function refreshBalance() {
 # Helpers
 # ---------------------------------------------------------------------------
 def get_cache_key(topic: str, is_recursive: bool, vocab_context: str = "") -> str:
+    """流程名：内容缓存键生成流程｜为同一请求参数生成稳定缓存键。"""
     return hashlib.md5(f"{topic}|{is_recursive}|{vocab_context}".encode()).hexdigest()
 
 
 def normalize_records_payload(payload: dict | None) -> dict:
+    """流程名：记录归一化流程｜校验并修正前端状态快照结构。"""
     if not isinstance(payload, dict):
         return {"items": [], "selId": None, "theme": "dark", "nextId": 1}
 
@@ -1446,11 +1449,14 @@ def normalize_records_payload(payload: dict | None) -> dict:
 # ---------------------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
 async def index():
+    """流程名：主页渲染流程｜返回单页应用 HTML 模板。"""
     return HTML_TEMPLATE
 
 
 @app.post("/api/generate")
 async def generate(req: Request):
+    """流程名：学习内容生成主流程｜参数校验→缓存命中→模型生成→结果落缓存。"""
+    # Step 1/5：请求解析与基础校验
     try:
         body = await req.json()
     except Exception:
@@ -1461,11 +1467,13 @@ async def generate(req: Request):
     if not topic or not isinstance(topic, str):
         return JSONResponse({"detail": "缺少 topic 参数"}, status_code=400)
 
+    # Step 2/5：请求去重与缓存短路
     vocab_context = body.get("vocabContext", "")
     cache_key = get_cache_key(topic, is_recursive, vocab_context)
     if cache_key in _cache:
         return JSONResponse(_cache[cache_key])
 
+    # Step 3/5：提示词编排（系统约束 + 用户上下文）
     # ── System Prompt ──────────────────────────────────────────────────────
     system_prompt = """你是一个出色的自适应学习内容生成器，生成结构清晰、富含互动元素的学习页面HTML片段。
 
@@ -1529,6 +1537,7 @@ h1 h2 h3 p ul ol li code pre blockquote hr details/summary
     level = recursive_level(topic) if is_recursive else 0
     user_prompt = f"主题：{topic}\n递归模式：{'是' if is_recursive else '否'}\n{build_vocab_rule(level)}\n生词上下文：{vocab_context or '无'}\n请生成JSON。"
 
+    # Step 4/5：调用模型并解析结构化结果
     try:
         response = client.chat.completions.create(
             model="deepseek-v4-pro",
@@ -1554,6 +1563,7 @@ h1 h2 h3 p ul ol li code pre blockquote hr details/summary
         _cache[cache_key] = payload
         return JSONResponse(payload)
 
+    # Step 5/5：异常兜底（格式恢复 / API错误 / 未知错误）
     except json.JSONDecodeError:
         if raw:
             try:
@@ -1577,10 +1587,12 @@ h1 h2 h3 p ul ol li code pre blockquote hr details/summary
 
 
 def recursive_level(topic: str) -> int:
+    """流程名：递归层级识别流程｜根据括号层级估算递归深度。"""
     return topic.count("（") + topic.count("(")
 
 
 def build_vocab_rule(level: int) -> str:
+    """流程名：词汇约束生成流程｜按递归层级生成生词控制规则。"""
     if level <= 0:
         return "递归层级0：没有对生词的限制。"
     if level == 1:
@@ -1591,12 +1603,14 @@ def build_vocab_rule(level: int) -> str:
 
 
 def gen_title_from_html(html: str) -> str:
+    """流程名：标题摘要流程｜从 HTML 文本中抽取简短标题。"""
     txt = re.sub(r"<[^>]+>", " ", html)
     txt = re.sub(r"\s+", " ", txt).strip()
     return (txt[:18] + "…") if len(txt) > 18 else txt
 
 @app.get("/api/records")
 async def get_records():
+    """流程名：学习记录读取流程｜读取并归一化持久化状态。"""
     if not os.path.exists(RECORDS_PATH):
         return JSONResponse({"items": [], "selId": None, "theme": "dark", "nextId": 1})
     with open(RECORDS_PATH, "r", encoding="utf-8") as f:
@@ -1605,6 +1619,7 @@ async def get_records():
 
 @app.put("/api/records")
 async def put_records(req: Request):
+    """流程名：学习记录保存流程｜接收前端状态并写入本地存储。"""
     payload = normalize_records_payload(await req.json())
     with open(RECORDS_PATH, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False)
@@ -1613,6 +1628,7 @@ async def put_records(req: Request):
 
 @app.get("/api/balance")
 async def get_balance():
+    """流程名：账户余额查询流程｜向 DeepSeek 余额接口查询可用额度。"""
     api_key = load_api_key()
     if not api_key:
         return JSONResponse({"balance": "--"})
@@ -1627,6 +1643,8 @@ async def get_balance():
 
 @app.post("/api/topic-clarify")
 async def topic_clarify(req: Request):
+    """流程名：主题消歧流程｜识别主题歧义并返回候选语境。"""
+    # Step 1/5：请求解析与基础校验
     try:
         body = await req.json()
     except Exception:
@@ -1641,11 +1659,13 @@ async def topic_clarify(req: Request):
         "3) 若无明显歧义返回空数组；4) 所有选项简洁。"
         f"\n主题：{topic}"
     )
+    # Step 4/5：调用模型并解析结构化结果
     try:
         response = client.chat.completions.create(
             model="deepseek-v4-pro",
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
+            extra_body={"thinking": {"type": "enabled"}},
             max_tokens=300,
         )
         raw = response.choices[0].message.content.strip()
