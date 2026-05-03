@@ -1455,8 +1455,8 @@ async def index():
 
 @app.post("/api/generate")
 async def generate(req: Request):
-    """流程名：学习内容生成主流程｜参数校验→缓存命中→模型生成→结果落缓存。"""
-    # Step 1/5：请求解析与基础校验
+    """主流程D：内容生成管线（校验 -> 缓存 -> 组 Prompt -> 调模型 -> 解析返回）。"""
+    # 步骤 D1：解析并校验请求体。
     try:
         body = await req.json()
     except Exception:
@@ -1467,13 +1467,13 @@ async def generate(req: Request):
     if not topic or not isinstance(topic, str):
         return JSONResponse({"detail": "缺少 topic 参数"}, status_code=400)
 
-    # Step 2/5：请求去重与缓存短路
+    # 步骤 D2：计算缓存键并执行命中短路。
     vocab_context = body.get("vocabContext", "")
     cache_key = get_cache_key(topic, is_recursive, vocab_context)
     if cache_key in _cache:
         return JSONResponse(_cache[cache_key])
 
-    # Step 3/5：提示词编排（系统约束 + 用户上下文）
+    # 步骤 D3：准备系统提示词模板。
     # ── System Prompt ──────────────────────────────────────────────────────
     system_prompt = """你是一个出色的自适应学习内容生成器，生成结构清晰、富含互动元素的学习页面HTML片段。
 
@@ -1534,10 +1534,11 @@ h1 h2 h3 p ul ol li code pre blockquote hr details/summary
 8. 初始模式（isRecursive=false）：展开背景+原理+应用，600-1200字，闪卡2-3张，测验1-2道，details至少1个
 """
 
+    # 步骤 D4：根据递归层级构造用户提示词。
     level = recursive_level(topic) if is_recursive else 0
     user_prompt = f"主题：{topic}\n递归模式：{'是' if is_recursive else '否'}\n{build_vocab_rule(level)}\n生词上下文：{vocab_context or '无'}\n请生成JSON。"
 
-    # Step 4/5：调用模型并解析结构化结果
+    # 步骤 D5：调用模型并解析标准 JSON 返回。
     try:
         response = client.chat.completions.create(
             model="deepseek-v4-pro",
@@ -1565,6 +1566,7 @@ h1 h2 h3 p ul ol li code pre blockquote hr details/summary
 
     # Step 5/5：异常兜底（格式恢复 / API错误 / 未知错误）
     except json.JSONDecodeError:
+        # 步骤 D6（降级）：尝试从包裹文本中抽取 JSON。
         if raw:
             try:
                 s, e = raw.find("{"), raw.rfind("}")
@@ -1628,7 +1630,7 @@ async def put_records(req: Request):
 
 @app.get("/api/balance")
 async def get_balance():
-    """流程名：账户余额查询流程｜向 DeepSeek 余额接口查询可用额度。"""
+    """流程J：查询并返回 DeepSeek 账户余额。"""
     api_key = load_api_key()
     if not api_key:
         return JSONResponse({"balance": "--"})
