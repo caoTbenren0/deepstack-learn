@@ -1166,13 +1166,25 @@ function renderMain() {
     clarifyPanel.style.display = "none";
     clarifyPanel.open = false;
     clarifyText.textContent = item.clarifyThinking || "该次未返回思考链";
+    var clarifyOptionsHtml = "";
+    if (hasClarifyOptions) {
+      clarifyOptionsHtml =
+        "<div style=\"display:flex;flex-direction:column;gap:8px;width:min(640px,100%);margin:12px auto 0;\">" +
+          item.clarifyOptions.map(function(op, idx) {
+            return "<button class=\"gen-btn clarify-option-btn\" data-clarify-idx=\"" + idx + "\" style=\"margin:0;text-align:left;\">" + esc(op) + "</button>";
+          }).join("") +
+          "<input id=\"inline-clarify-custom\" placeholder=\"自行补充（可选）\" style=\"width:100%;background:var(--bg);border:1px solid var(--bd);color:var(--t1);padding:8px 10px;\">" +
+          "<div style=\"display:flex;gap:8px;flex-wrap:wrap;\">" +
+            "<button id=\"inline-clarify-custom-btn\" class=\"gen-btn\" style=\"margin:0;\">使用自行补充</button>" +
+            "<button id=\"inline-clarify-skip-btn\" class=\"gen-btn\" style=\"margin:0;background:var(--t3);\">跳过</button>" +
+          "</div>" +
+        "</div>";
+    }
     doc.innerHTML =
       "<div class=\"state-screen\">" +
         "<div class=\"state-title\">" + esc(item.topic) + "</div>" +
         "<div class=\"state-sub\">" + (hasClarifyOptions ? "主题需要先澄清" : "内容尚未生成") + "</div>" +
-        (hasClarifyOptions
-          ? "<button id=\"open-clarify-btn\" class=\"gen-btn\">选择澄清方向</button>"
-          : "<button id=\"generate-btn\" class=\"gen-btn\">生成内容</button>") +
+        (hasClarifyOptions ? clarifyOptionsHtml : "<button id=\"generate-btn\" class=\"gen-btn\">生成内容</button>") +
       "</div>";
     return;
   }
@@ -1270,11 +1282,12 @@ async function generateSelected() {
       item.clarifyOptions = data.options.slice(0,5);
       item.clarifyThinking = data.thinking || "";
       pendingClarifyThinking = item.clarifyThinking;
+      pendingClarifyOptions = item.clarifyOptions.slice(0, 5);
       renderSidebar();
       if (selId === item.id) renderMain();
       saveState();
       syncRecordsToServer();
-      openClarifyPanel(item.topic, data.options.slice(0,5));
+      closeClarifyPanel();
       return;
     }
     if (!data.htmlContent) throw new Error("生成内容为空");
@@ -1376,7 +1389,7 @@ function openClarifyPanel(topic, options) {
   });
   var panel = document.getElementById("clarify-panel");
   document.getElementById("clarify-custom").value = "";
-  panel.showModal();
+  openDialog(panel);
   trapFocus(panel);
 }
 
@@ -1475,7 +1488,7 @@ function openInterviewPanel(topic, clarifyOptions) {
   document.getElementById("interview-topic").textContent = "主题：" + topic + (pendingClarifyOptions.length ? (" ｜ 可选澄清：" + pendingClarifyOptions.join(" / ")) : "");
   prepareInterviewOptions(topic, pendingClarifyOptions);
   var panel = document.getElementById("interview-panel");
-  panel.showModal();
+  openDialog(panel);
   trapFocus(panel);
 }
 
@@ -1511,8 +1524,22 @@ document.getElementById("topic-input").addEventListener("keypress", function(e) 
   if (e.key === "Enter") { e.preventDefault(); handleAdd(); }
 });
 
+function openDialog(panel) {
+  if (!panel) return;
+  if (typeof panel.showModal === "function") {
+    panel.showModal();
+    return;
+  }
+  panel.setAttribute("open", "open");
+}
+
 function closeDialog(panel) {
-  if (panel && panel.open) panel.close();
+  if (!panel || !panel.open) return;
+  if (typeof panel.close === "function") {
+    panel.close();
+    return;
+  }
+  panel.removeAttribute("open");
 }
 
 function trapFocus(panel) {
@@ -1584,7 +1611,7 @@ document.getElementById("item-list").addEventListener("click", function(e) {
   if (row) selectItem(Number(row.dataset.itemId));
 });
 document.getElementById("content-doc").addEventListener("click", function(e) {
-  var actionBtn = e.target.closest("#generate-btn, #retry-btn, #open-clarify-btn");
+  var actionBtn = e.target.closest("#generate-btn, #retry-btn, .clarify-option-btn, #inline-clarify-custom-btn, #inline-clarify-skip-btn");
   if (!actionBtn) return;
 
   if (actionBtn.id === "generate-btn" || actionBtn.id === "retry-btn") {
@@ -1593,9 +1620,30 @@ document.getElementById("content-doc").addEventListener("click", function(e) {
   }
 
   var current = (selId !== null) ? findItem(selId) : null;
-  if (current && Array.isArray(current.clarifyOptions) && current.clarifyOptions.length) {
+  if (!current) return;
+
+  if (actionBtn.classList.contains("clarify-option-btn")) {
+    var idx = Number(actionBtn.dataset.clarifyIdx);
+    if (Array.isArray(current.clarifyOptions) && current.clarifyOptions[idx]) {
+      pendingTopic = current.topic;
+      selectClarifyOption(current.clarifyOptions[idx]);
+    }
+    return;
+  }
+
+  if (actionBtn.id === "inline-clarify-custom-btn") {
+    pendingTopic = current.topic;
+    var inlineInput = document.getElementById("inline-clarify-custom");
+    if (inlineInput) document.getElementById("clarify-custom").value = inlineInput.value || "";
+    submitClarifyCustom();
+    return;
+  }
+
+  if (actionBtn.id === "inline-clarify-skip-btn") {
+    pendingTopic = current.topic;
     pendingClarifyThinking = current.clarifyThinking || "";
-    openClarifyPanel(current.topic, current.clarifyOptions);
+    pendingClarifyOptions = Array.isArray(current.clarifyOptions) ? current.clarifyOptions.slice(0, 5) : [];
+    skipClarify();
   }
 });
 
