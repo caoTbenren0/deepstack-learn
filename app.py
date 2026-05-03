@@ -898,10 +898,14 @@ body {
 <dialog id="interview-panel" aria-modal="true" style="width:min(92vw,560px);background:var(--surface);border:1px solid var(--bd);padding:14px;">
   <div style="font-family:var(--font-head);font-size:16px;margin-bottom:8px;">学习前追问（三问）</div>
   <div id="interview-topic" style="font-size:12px;color:var(--t2);margin-bottom:10px;"></div>
-  <div style="display:flex;flex-direction:column;gap:8px;">
-    <input id="interview-a1" placeholder="1) 你当前最想解决的具体问题？" style="width:100%;background:var(--bg);border:1px solid var(--bd);color:var(--t1);padding:8px 10px;">
-    <input id="interview-a2" placeholder="2) 你的已有基础（0基础/入门/进阶）？" style="width:100%;background:var(--bg);border:1px solid var(--bd);color:var(--t1);padding:8px 10px;">
-    <input id="interview-a3" placeholder="3) 你希望内容偏理论、实战还是速览？" style="width:100%;background:var(--bg);border:1px solid var(--bd);color:var(--t1);padding:8px 10px;">
+  <div id="interview-loading" style="display:none;font-size:12px;color:var(--t2);margin-bottom:8px;">AI 正在生成三问选项...</div>
+  <div id="interview-questions" style="display:flex;flex-direction:column;gap:8px;">
+    <div style="font-size:12px;color:var(--t2);">1) 你当前最想解决的具体问题？</div>
+    <select id="interview-a1" style="width:100%;background:var(--bg);border:1px solid var(--bd);color:var(--t1);padding:8px 10px;"></select>
+    <div style="font-size:12px;color:var(--t2);">2) 你的已有基础（0基础/入门/进阶）？</div>
+    <select id="interview-a2" style="width:100%;background:var(--bg);border:1px solid var(--bd);color:var(--t1);padding:8px 10px;"></select>
+    <div style="font-size:12px;color:var(--t2);">3) 你希望内容偏理论、实战还是速览？</div>
+    <select id="interview-a3" style="width:100%;background:var(--bg);border:1px solid var(--bd);color:var(--t1);padding:8px 10px;"></select>
   </div>
   <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
     <button id="interview-submit-btn" class="gen-btn" style="margin:0;">确认并添加</button>
@@ -1396,13 +1400,54 @@ function skipClarify() {
   pendingClarifyThinking = "";
 }
 
+
+function fillInterviewSelect(elId, options, fallbackOptions) {
+  var el = document.getElementById(elId);
+  if (!el) return;
+  var opts = (Array.isArray(options) && options.length) ? options : fallbackOptions;
+  el.innerHTML = "";
+  opts.forEach(function(op) {
+    var o = document.createElement("option");
+    o.value = op;
+    o.textContent = op;
+    el.appendChild(o);
+  });
+}
+
+async function prepareInterviewOptions(topic, clarifyOptions) {
+  var loading = document.getElementById("interview-loading");
+  loading.style.display = "block";
+  var fallback = {
+    q1: ["快速入门并能马上动手","先理解核心概念再实践","解决一个真实场景问题"],
+    q2: ["0基础","入门","进阶"],
+    q3: ["偏理论","偏实战","先速览后深入"]
+  };
+  try {
+    var res = await fetch("/api/interview-options", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ topic: topic, clarifyOptions: clarifyOptions || [] })
+    });
+    if (res.ok) {
+      var data = await res.json();
+      fillInterviewSelect("interview-a1", data.q1, fallback.q1);
+      fillInterviewSelect("interview-a2", data.q2, fallback.q2);
+      fillInterviewSelect("interview-a3", data.q3, fallback.q3);
+      loading.style.display = "none";
+      return;
+    }
+  } catch(e) {}
+  fillInterviewSelect("interview-a1", null, fallback.q1);
+  fillInterviewSelect("interview-a2", null, fallback.q2);
+  fillInterviewSelect("interview-a3", null, fallback.q3);
+  loading.style.display = "none";
+}
+
 function openInterviewPanel(topic, clarifyOptions) {
   pendingTopic = topic;
   pendingClarifyOptions = Array.isArray(clarifyOptions) ? clarifyOptions.slice(0, 5) : [];
   document.getElementById("interview-topic").textContent = "主题：" + topic + (pendingClarifyOptions.length ? (" ｜ 可选澄清：" + pendingClarifyOptions.join(" / ")) : "");
-  document.getElementById("interview-a1").value = "";
-  document.getElementById("interview-a2").value = "";
-  document.getElementById("interview-a3").value = "";
+  prepareInterviewOptions(topic, pendingClarifyOptions);
   var panel = document.getElementById("interview-panel");
   panel.showModal();
   trapFocus(panel);
@@ -1913,6 +1958,39 @@ async def topic_clarify(req: Request):
         return JSONResponse({"options": options, "thinking": thinking})
     except Exception:
         return JSONResponse({"options": [], "thinking": ""})
+
+
+@app.post("/api/interview-options")
+async def interview_options(req: Request):
+    """流程名：三问选项生成流程｜根据主题生成每问3个可选项。"""
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"q1": [], "q2": [], "q3": []})
+    topic = (body.get("topic") or "").strip()
+    clarify_options = body.get("clarifyOptions") if isinstance(body.get("clarifyOptions"), list) else []
+    prompt = (
+        "请基于学习主题生成学习前追问的选项，返回JSON："
+        '{"q1":["...","...","..."],"q2":["...","...","..."],"q3":["...","...","..."]}。'
+        "要求：每个数组恰好3个简洁中文选项；q1聚焦学习目标，q2聚焦基础水平，q3聚焦学习偏好。"
+        f"\n主题：{topic}\n候选澄清：{', '.join([str(x) for x in clarify_options[:5]]) or '无'}"
+    )
+    try:
+        response = client.chat.completions.create(
+            model="deepseek-v4-pro",
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
+            max_tokens=300,
+        )
+        data = json.loads(response.choices[0].message.content.strip())
+        out = {}
+        for k in ["q1", "q2", "q3"]:
+            vals = data.get(k) if isinstance(data, dict) else []
+            vals = [str(x).strip() for x in (vals if isinstance(vals, list) else []) if str(x).strip()][:3]
+            out[k] = vals
+        return JSONResponse(out)
+    except Exception:
+        return JSONResponse({"q1": [], "q2": [], "q3": []})
 
 
 if __name__ == "__main__":
