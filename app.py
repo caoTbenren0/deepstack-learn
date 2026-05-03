@@ -1282,11 +1282,12 @@ async function generateSelected() {
       item.clarifyOptions = data.options.slice(0,5);
       item.clarifyThinking = data.thinking || "";
       pendingClarifyThinking = item.clarifyThinking;
+      pendingClarifyOptions = item.clarifyOptions.slice(0, 5);
       renderSidebar();
       if (selId === item.id) renderMain();
       saveState();
       syncRecordsToServer();
-      openClarifyPanel(item.topic, data.options.slice(0,5));
+      closeClarifyPanel();
       return;
     }
     if (!data.htmlContent) throw new Error("生成内容为空");
