@@ -887,6 +887,11 @@ body {
   <div id="content-scroll">
     <div id="content-doc"></div>
     <button id="show-thinking-btn" class="gen-btn" style="display:none;margin-top:14px;" onclick="showThinking()">查看生成思考链</button>
+    <button id="show-clarify-thinking-btn" class="gen-btn" style="display:none;margin-top:14px;" onclick="toggleClarifyThinking()">查看歧义判断思考链</button>
+    <details id="clarify-thinking-panel" style="display:none;margin-top:10px;">
+      <summary>歧义判断思考链（只读）</summary>
+      <pre id="clarify-thinking-text" style="white-space:pre-wrap;background:var(--bg);border:1px solid var(--bd);padding:10px;font-family:var(--font-ui);font-size:12px;"></pre>
+    </details>
   </div>
   <button id="float-btn" onclick="floatClick()">+ 加入队列</button>
 </div>
@@ -921,13 +926,14 @@ body {
 var STORE_KEY = "rlq_v4";
 var MAX = 64;
 
-var items      = [];   // {id,topic,title,isRecursive,status,htmlContent,errorMsg,ts,thinking,vocabContext}
+var items      = [];   // {id,topic,title,isRecursive,status,htmlContent,errorMsg,ts,thinking,clarifyThinking,vocabContext}
 var selId      = null; // selected item id
 var theme      = "dark";
 var nextId     = 1;
 var pendingTopic = null;
 var forceInterview = false;
 var pendingClarifyOptions = [];
+var pendingClarifyThinking = "";
 
 
 function isMobile() {
@@ -959,7 +965,8 @@ function saveState() {
       status: (it.status === "loading") ? "pending" : it.status,
       htmlContent: it.htmlContent || null,
       errorMsg: it.errorMsg || null,
-      ts: it.ts
+      ts: it.ts,
+      clarifyThinking: (typeof it.clarifyThinking === "string") ? it.clarifyThinking : ""
     };
   });
   try {
@@ -1118,8 +1125,15 @@ function setTopbar(topic, status) {
 function renderMain() {
   var doc = document.getElementById("content-doc");
   var item = (selId !== null) ? findItem(selId) : null;
+  var clarifyBtn = document.getElementById("show-clarify-thinking-btn");
+  var clarifyPanel = document.getElementById("clarify-thinking-panel");
+  var clarifyText = document.getElementById("clarify-thinking-text");
 
   if (!item) {
+    document.getElementById("show-thinking-btn").style.display = "none";
+    clarifyBtn.style.display = "none";
+    clarifyPanel.style.display = "none";
+    clarifyPanel.open = false;
     setTopbar(null, null);
     doc.innerHTML =
       "<div class=\"state-screen\">" +
@@ -1139,6 +1153,11 @@ function renderMain() {
   setTopbar(item.topic, item.status);
 
   if (item.status === "pending") {
+    document.getElementById("show-thinking-btn").style.display = "none";
+    clarifyBtn.style.display = "inline-block";
+    clarifyPanel.style.display = "none";
+    clarifyPanel.open = false;
+    clarifyText.textContent = item.clarifyThinking || "该次未返回思考链";
     doc.innerHTML =
       "<div class=\"state-screen\">" +
         "<div class=\"state-title\">" + esc(item.topic) + "</div>" +
@@ -1149,6 +1168,10 @@ function renderMain() {
   }
 
   if (item.status === "loading") {
+    document.getElementById("show-thinking-btn").style.display = "none";
+    clarifyBtn.style.display = "none";
+    clarifyPanel.style.display = "none";
+    clarifyPanel.open = false;
     doc.innerHTML =
       "<div class=\"state-screen\">" +
         "<div class=\"state-sub\">正在生成 <strong>" + esc(item.topic) + "</strong> 的内容…</div>" +
@@ -1168,11 +1191,18 @@ function renderMain() {
   if (item.status === "done") {
     doc.innerHTML = item.htmlContent || "";
     document.getElementById("show-thinking-btn").style.display = item.thinking ? "inline-block" : "none";
+    clarifyBtn.style.display = "inline-block";
+    clarifyPanel.style.display = "none";
+    clarifyPanel.open = false;
+    clarifyText.textContent = item.clarifyThinking || "该次未返回思考链";
     runScripts(doc);
     document.getElementById("content-scroll").scrollTo({ top: 0, behavior: "smooth" });
     return;
   }
   document.getElementById("show-thinking-btn").style.display = "none";
+  clarifyBtn.style.display = "none";
+  clarifyPanel.style.display = "none";
+  clarifyPanel.open = false;
 
   if (item.status === "error") {
     doc.innerHTML =
@@ -1237,7 +1267,7 @@ async function generateSelected() {
 // ════════════════════════════════════════
 //  ADD / SELECT / DELETE
 // ════════════════════════════════════════
-function addItem(topic, isRecursive, learningContext) {
+function addItem(topic, isRecursive, learningContext, clarifyThinking) {
   topic = topic.trim();
   if (!topic) return;
 
@@ -1267,7 +1297,8 @@ function addItem(topic, isRecursive, learningContext) {
     htmlContent: null,
     errorMsg: null,
     ts: Date.now(),
-    learningContext: learningContext || null
+    learningContext: learningContext || null,
+    clarifyThinking: (typeof clarifyThinking === "string") ? clarifyThinking : ""
   };
   items.unshift(it);
   selId = it.id;
@@ -1323,17 +1354,19 @@ function closeClarifyPanel() {
 
 function selectClarifyOption(val) {
   if (!pendingTopic) return;
-  addItem(val, false);
+  addItem(val, false, null, pendingClarifyThinking);
   closeClarifyPanel();
   pendingTopic = null;
+  pendingClarifyThinking = "";
 }
 
 function submitClarifyCustom() {
   if (!pendingTopic) return;
   var custom = document.getElementById("clarify-custom").value.trim();
-  addItem(custom || pendingTopic, false);
+  addItem(custom || pendingTopic, false, null, pendingClarifyThinking);
   closeClarifyPanel();
   pendingTopic = null;
+  pendingClarifyThinking = "";
 }
 
 function skipClarify() {
@@ -1341,11 +1374,12 @@ function skipClarify() {
   if (forceInterview) {
     openInterviewPanel(pendingTopic, pendingClarifyOptions);
   } else {
-    addItem(pendingTopic, false);
+    addItem(pendingTopic, false, null, pendingClarifyThinking);
   }
   closeClarifyPanel();
   pendingTopic = null;
   pendingClarifyOptions = [];
+  pendingClarifyThinking = "";
 }
 
 function openInterviewPanel(topic, clarifyOptions) {
@@ -1372,10 +1406,11 @@ function submitInterviewAnswers() {
     q2: document.getElementById("interview-a2").value.trim(),
     q3: document.getElementById("interview-a3").value.trim()
   };
-  addItem(pendingTopic, false, learningContext);
+  addItem(pendingTopic, false, learningContext, pendingClarifyThinking);
   closeInterviewPanel();
   pendingTopic = null;
   pendingClarifyOptions = [];
+  pendingClarifyThinking = "";
 }
 
 async function handleAdd() {
@@ -1385,6 +1420,7 @@ async function handleAdd() {
   if (!v) return;
   inp.value = "";
   var options = [];
+  var clarifyThinking = "";
   try {
     var res = await fetch("/api/topic-clarify", {
       method: "POST",
@@ -1394,14 +1430,16 @@ async function handleAdd() {
     if (res.ok) {
       var data = await res.json();
       options = Array.isArray(data.options) ? data.options.slice(0, 5) : [];
+      clarifyThinking = (typeof data.thinking === "string") ? data.thinking : "";
     }
   } catch(e) {}
+  pendingClarifyThinking = clarifyThinking;
   if (forceInterview) {
     openInterviewPanel(v, options);
     return;
   }
   if (!options.length) {
-    addItem(v, false);
+    addItem(v, false, null, clarifyThinking);
     return;
   }
   openClarifyPanel(v, options);
@@ -1470,6 +1508,16 @@ function showThinking() {
   var item = (selId !== null) ? findItem(selId) : null;
   if (!item || !item.thinking) return;
   alert(item.thinking);
+}
+
+function toggleClarifyThinking() {
+  var item = (selId !== null) ? findItem(selId) : null;
+  if (!item) return;
+  var panel = document.getElementById("clarify-thinking-panel");
+  var text = document.getElementById("clarify-thinking-text");
+  text.textContent = item.clarifyThinking || "该次未返回思考链";
+  panel.style.display = "block";
+  panel.open = !panel.open;
 }
 
 async function refreshBalance() {
@@ -1764,15 +1812,19 @@ async def topic_clarify(req: Request):
             extra_body={"thinking": {"type": "enabled"}},
             max_tokens=300,
         )
-        raw = response.choices[0].message.content.strip()
+        msg = response.choices[0].message
+        raw = msg.content.strip()
         data = json.loads(raw)
         options = data.get("options") if isinstance(data, dict) else []
         if not isinstance(options, list):
             options = []
         options = [str(x).strip() for x in options if str(x).strip()][:5]
-        return JSONResponse({"options": options})
+        thinking = ""
+        if hasattr(msg, "reasoning_content"):
+            thinking = msg.reasoning_content or ""
+        return JSONResponse({"options": options, "thinking": thinking})
     except Exception:
-        return JSONResponse({"options": []})
+        return JSONResponse({"options": [], "thinking": ""})
 
 
 if __name__ == "__main__":
