@@ -853,6 +853,13 @@ body {
       <input type="text" id="topic-input" placeholder="输入主题，回车添加" autocomplete="off">
       <button id="add-btn" onclick="handleAdd()">+ 添加</button>
     </div>
+    <div style="margin-top:8px;font-size:11px;color:var(--t2);font-family:var(--font-ui);display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+      <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
+        <input type="checkbox" id="force-interview-toggle" onchange="toggleForceInterview(this.checked)">
+        <span>强制先追问3问</span>
+      </label>
+      <span id="force-interview-hint">未开启</span>
+    </div>
   </div>
 
   <div class="sb-list-top">
@@ -867,6 +874,7 @@ body {
 </div>
 <div id="sidebar-mask" onclick="closeSidebar()"></div>
 <div id="clarify-mask" onclick="closeClarifyPanel()" style="position:fixed;inset:0;background:rgba(0,0,0,.48);z-index:1200;"></div>
+<div id="interview-mask" onclick="closeInterviewPanel()" style="position:fixed;inset:0;background:rgba(0,0,0,.48);z-index:1200;"></div>
 
 <!-- ════════════ MAIN ════════════ -->
 <div id="main">
@@ -881,6 +889,19 @@ body {
     <button id="show-thinking-btn" class="gen-btn" style="display:none;margin-top:14px;" onclick="showThinking()">查看生成思考链</button>
   </div>
   <button id="float-btn" onclick="floatClick()">+ 加入队列</button>
+</div>
+<div id="interview-panel" style="display:none;position:fixed;z-index:1201;left:50%;top:50%;transform:translate(-50%,-50%);width:min(92vw,560px);background:var(--surface);border:1px solid var(--bd);padding:14px;">
+  <div style="font-family:var(--font-head);font-size:16px;margin-bottom:8px;">学习前追问（三问）</div>
+  <div id="interview-topic" style="font-size:12px;color:var(--t2);margin-bottom:10px;"></div>
+  <div style="display:flex;flex-direction:column;gap:8px;">
+    <input id="interview-a1" placeholder="1) 你当前最想解决的具体问题？" style="width:100%;background:var(--bg);border:1px solid var(--bd);color:var(--t1);padding:8px 10px;">
+    <input id="interview-a2" placeholder="2) 你的已有基础（0基础/入门/进阶）？" style="width:100%;background:var(--bg);border:1px solid var(--bd);color:var(--t1);padding:8px 10px;">
+    <input id="interview-a3" placeholder="3) 你希望内容偏理论、实战还是速览？" style="width:100%;background:var(--bg);border:1px solid var(--bd);color:var(--t1);padding:8px 10px;">
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
+    <button class="gen-btn" style="margin:0;" onclick="submitInterviewAnswers()">确认并添加</button>
+    <button class="gen-btn" style="margin:0;background:var(--t3);" onclick="closeInterviewPanel()">取消</button>
+  </div>
 </div>
 <div id="clarify-panel" style="display:none;position:fixed;z-index:1201;left:50%;top:50%;transform:translate(-50%,-50%);width:min(92vw,520px);background:var(--surface);border:1px solid var(--bd);padding:14px;">
   <div style="font-family:var(--font-head);font-size:16px;margin-bottom:8px;">主题可能有歧义</div>
@@ -905,6 +926,8 @@ var selId      = null; // selected item id
 var theme      = "dark";
 var nextId     = 1;
 var pendingTopic = null;
+var forceInterview = false;
+var pendingClarifyOptions = [];
 
 
 function isMobile() {
@@ -941,7 +964,7 @@ function saveState() {
   });
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify({
-      items: toSave, selId: selId, theme: theme, nextId: nextId
+      items: toSave, selId: selId, theme: theme, nextId: nextId, forceInterview: forceInterview
     }));
   } catch(e) {}
 }
@@ -952,7 +975,7 @@ async function syncRecordsToServer() {
     await fetch("/api/records", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ items: items, selId: selId, theme: theme, nextId: nextId })
+      body: JSON.stringify({ items: items, selId: selId, theme: theme, nextId: nextId, forceInterview: forceInterview })
     });
   } catch(e) {}
 }
@@ -963,7 +986,7 @@ async function loadRecordsFromServer() {
     if (!res.ok) return;
     var d = await res.json();
     if (d && Array.isArray(d.items)) {
-      items = d.items; selId = d.selId; theme = d.theme || theme; nextId = d.nextId || nextId;
+      items = d.items; selId = d.selId; theme = d.theme || theme; nextId = d.nextId || nextId; forceInterview = !!d.forceInterview;
       trimItemsToMax();
     }
   } catch(e) {}
@@ -978,8 +1001,22 @@ function loadState() {
     selId  = (d.selId !== undefined) ? d.selId : null;
     theme  = d.theme  || "dark";
     nextId = d.nextId || items.length + 1;
+    forceInterview = !!d.forceInterview;
     trimItemsToMax();
   } catch(e) {}
+}
+
+function renderForceInterviewState() {
+  var toggle = document.getElementById("force-interview-toggle");
+  var hint = document.getElementById("force-interview-hint");
+  if (toggle) toggle.checked = !!forceInterview;
+  if (hint) hint.textContent = forceInterview ? "已开启：所有主题先追问3问" : "未开启";
+}
+function toggleForceInterview(checked) {
+  forceInterview = !!checked;
+  renderForceInterviewState();
+  saveState();
+  syncRecordsToServer();
 }
 
 // ════════════════════════════════════════
@@ -1168,7 +1205,12 @@ async function generateSelected() {
     var res = await fetch("/api/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ topic: item.topic, isRecursive: item.isRecursive, vocabContext: item.vocabContext || "" })
+      body: JSON.stringify({
+        topic: item.topic,
+        isRecursive: item.isRecursive,
+        vocabContext: item.vocabContext || "",
+        learningContext: item.learningContext || null
+      })
     });
     if (!res.ok) {
       var e = await res.json().catch(function() { return { detail: "未知错误" }; });
@@ -1195,7 +1237,7 @@ async function generateSelected() {
 // ════════════════════════════════════════
 //  ADD / SELECT / DELETE
 // ════════════════════════════════════════
-function addItem(topic, isRecursive) {
+function addItem(topic, isRecursive, learningContext) {
   topic = topic.trim();
   if (!topic) return;
 
@@ -1224,7 +1266,8 @@ function addItem(topic, isRecursive) {
     status: "pending",
     htmlContent: null,
     errorMsg: null,
-    ts: Date.now()
+    ts: Date.now(),
+    learningContext: learningContext || null
   };
   items.unshift(it);
   selId = it.id;
@@ -1295,9 +1338,44 @@ function submitClarifyCustom() {
 
 function skipClarify() {
   if (!pendingTopic) return;
-  addItem(pendingTopic, false);
+  if (forceInterview) {
+    openInterviewPanel(pendingTopic, pendingClarifyOptions);
+  } else {
+    addItem(pendingTopic, false);
+  }
   closeClarifyPanel();
   pendingTopic = null;
+  pendingClarifyOptions = [];
+}
+
+function openInterviewPanel(topic, clarifyOptions) {
+  pendingTopic = topic;
+  pendingClarifyOptions = Array.isArray(clarifyOptions) ? clarifyOptions.slice(0, 5) : [];
+  document.getElementById("interview-topic").textContent = "主题：" + topic + (pendingClarifyOptions.length ? (" ｜ 可选澄清：" + pendingClarifyOptions.join(" / ")) : "");
+  document.getElementById("interview-a1").value = "";
+  document.getElementById("interview-a2").value = "";
+  document.getElementById("interview-a3").value = "";
+  document.getElementById("interview-panel").style.display = "block";
+  document.body.classList.add("clarify-open");
+}
+
+function closeInterviewPanel() {
+  document.getElementById("interview-panel").style.display = "none";
+  document.body.classList.remove("clarify-open");
+}
+
+function submitInterviewAnswers() {
+  if (!pendingTopic) return;
+  var learningContext = {
+    clarifyOptions: pendingClarifyOptions,
+    q1: document.getElementById("interview-a1").value.trim(),
+    q2: document.getElementById("interview-a2").value.trim(),
+    q3: document.getElementById("interview-a3").value.trim()
+  };
+  addItem(pendingTopic, false, learningContext);
+  closeInterviewPanel();
+  pendingTopic = null;
+  pendingClarifyOptions = [];
 }
 
 async function handleAdd() {
@@ -1318,6 +1396,10 @@ async function handleAdd() {
       options = Array.isArray(data.options) ? data.options.slice(0, 5) : [];
     }
   } catch(e) {}
+  if (forceInterview) {
+    openInterviewPanel(v, options);
+    return;
+  }
   if (!options.length) {
     addItem(v, false);
     return;
@@ -1407,6 +1489,7 @@ async function refreshBalance() {
   loadState();
   await loadRecordsFromServer();
   applyTheme();
+  renderForceInterviewState();
   renderSidebar();
   renderMain();
   refreshBalance();
@@ -1420,15 +1503,16 @@ async function refreshBalance() {
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def get_cache_key(topic: str, is_recursive: bool, vocab_context: str = "") -> str:
+def get_cache_key(topic: str, is_recursive: bool, vocab_context: str = "", learning_context: dict | None = None) -> str:
     """流程名：内容缓存键生成流程｜为同一请求参数生成稳定缓存键。"""
-    return hashlib.md5(f"{topic}|{is_recursive}|{vocab_context}".encode()).hexdigest()
+    learning_sig = json.dumps(learning_context or {}, ensure_ascii=False, sort_keys=True)
+    return hashlib.md5(f"{topic}|{is_recursive}|{vocab_context}|{learning_sig}".encode()).hexdigest()
 
 
 def normalize_records_payload(payload: dict | None) -> dict:
     """流程名：记录归一化流程｜校验并修正前端状态快照结构。"""
     if not isinstance(payload, dict):
-        return {"items": [], "selId": None, "theme": "dark", "nextId": 1}
+        return {"items": [], "selId": None, "theme": "dark", "nextId": 1, "forceInterview": False}
 
     items = payload.get("items") if isinstance(payload.get("items"), list) else []
     items = items[:MAX_RECENT_PAGES]
@@ -1441,7 +1525,8 @@ def normalize_records_payload(payload: dict | None) -> dict:
         next_id = len(items) + 1
 
     theme = payload.get("theme") if isinstance(payload.get("theme"), str) else "dark"
-    return {"items": items, "selId": sel_id, "theme": theme, "nextId": next_id}
+    force_interview = bool(payload.get("forceInterview"))
+    return {"items": items, "selId": sel_id, "theme": theme, "nextId": next_id, "forceInterview": force_interview}
 
 
 # ---------------------------------------------------------------------------
@@ -1469,7 +1554,8 @@ async def generate(req: Request):
 
     # 步骤 D2：计算缓存键并执行命中短路。
     vocab_context = body.get("vocabContext", "")
-    cache_key = get_cache_key(topic, is_recursive, vocab_context)
+    learning_context = body.get("learningContext") if isinstance(body.get("learningContext"), dict) else {}
+    cache_key = get_cache_key(topic, is_recursive, vocab_context, learning_context)
     if cache_key in _cache:
         return JSONResponse(_cache[cache_key])
 
@@ -1536,7 +1622,15 @@ h1 h2 h3 p ul ol li code pre blockquote hr details/summary
 
     # 步骤 D4：根据递归层级构造用户提示词。
     level = recursive_level(topic) if is_recursive else 0
-    user_prompt = f"主题：{topic}\n递归模式：{'是' if is_recursive else '否'}\n{build_vocab_rule(level)}\n生词上下文：{vocab_context or '无'}\n请生成JSON。"
+    interview_context = "无"
+    if learning_context:
+        interview_context = (
+            f"澄清候选：{', '.join(learning_context.get('clarifyOptions', [])) or '无'}；"
+            f"问题1：{learning_context.get('q1') or '未填写'}；"
+            f"问题2：{learning_context.get('q2') or '未填写'}；"
+            f"问题3：{learning_context.get('q3') or '未填写'}"
+        )
+    user_prompt = f"主题：{topic}\n递归模式：{'是' if is_recursive else '否'}\n{build_vocab_rule(level)}\n生词上下文：{vocab_context or '无'}\n学习者追问上下文：{interview_context}\n请生成JSON。"
 
     # 步骤 D5：调用模型并解析标准 JSON 返回。
     try:
