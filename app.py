@@ -962,7 +962,7 @@ function saveState() {
       topic: it.topic,
       title: it.title || it.topic,
       isRecursive: it.isRecursive,
-      status: (it.status === "loading") ? "pending" : it.status,
+      status: (it.status === "loading" || it.status === "clarify") ? "pending" : it.status,
       htmlContent: it.htmlContent || null,
       errorMsg: it.errorMsg || null,
       ts: it.ts,
@@ -1158,6 +1158,7 @@ function renderMain() {
   setTopbar(item.topic, item.status);
 
   if (item.status === "pending") {
+    var hasClarifyOptions = Array.isArray(item.clarifyOptions) && item.clarifyOptions.length > 0;
     thinkingBtn.style.display = "none";
     thinkingPanel.style.display = "none";
     thinkingPanel.open = false;
@@ -1168,8 +1169,10 @@ function renderMain() {
     doc.innerHTML =
       "<div class=\"state-screen\">" +
         "<div class=\"state-title\">" + esc(item.topic) + "</div>" +
-        "<div class=\"state-sub\">内容尚未生成</div>" +
-        "<button id=\"generate-btn\" class=\"gen-btn\">生成内容</button>" +
+        "<div class=\"state-sub\">" + (hasClarifyOptions ? "主题需要先澄清" : "内容尚未生成") + "</div>" +
+        (hasClarifyOptions
+          ? "<button id=\"open-clarify-btn\" class=\"gen-btn\">选择澄清方向</button>"
+          : "<button id=\"generate-btn\" class=\"gen-btn\">生成内容</button>") +
       "</div>";
     return;
   }
@@ -1241,6 +1244,7 @@ async function generateSelected() {
   item.status = "loading";
   item.htmlContent = null;
   item.errorMsg = null;
+  item.clarifyOptions = [];
   renderSidebar();
   renderMain();
   saveState();
@@ -1263,7 +1267,9 @@ async function generateSelected() {
     var data = await res.json();
     if (Array.isArray(data.options) && data.options.length) {
       item.status = "pending";
-      pendingClarifyThinking = data.thinking || "";
+      item.clarifyOptions = data.options.slice(0,5);
+      item.clarifyThinking = data.thinking || "";
+      pendingClarifyThinking = item.clarifyThinking;
       renderSidebar();
       if (selId === item.id) renderMain();
       saveState();
@@ -1275,6 +1281,7 @@ async function generateSelected() {
     item.status = "done";
     item.htmlContent = data.htmlContent;
     item.thinking = data.thinking || "";
+    item.clarifyOptions = [];
     if (data.title) item.title = data.title;
     refreshBalance();
   } catch(err) {
@@ -1322,7 +1329,8 @@ function addItem(topic, isRecursive, learningContext, clarifyThinking) {
     errorMsg: null,
     ts: Date.now(),
     learningContext: learningContext || null,
-    clarifyThinking: (typeof clarifyThinking === "string") ? clarifyThinking : ""
+    clarifyThinking: (typeof clarifyThinking === "string") ? clarifyThinking : "",
+    clarifyOptions: []
   };
   items.unshift(it);
   selId = it.id;
@@ -1577,6 +1585,13 @@ document.getElementById("item-list").addEventListener("click", function(e) {
 });
 document.getElementById("content-doc").addEventListener("click", function(e) {
   if (e.target.id === "generate-btn" || e.target.id === "retry-btn") generateSelected();
+  if (e.target.id === "open-clarify-btn") {
+    var current = (selId !== null) ? findItem(selId) : null;
+    if (current && Array.isArray(current.clarifyOptions) && current.clarifyOptions.length) {
+      pendingClarifyThinking = current.clarifyThinking || "";
+      openClarifyPanel(current.topic, current.clarifyOptions);
+    }
+  }
 });
 
 document.getElementById("content-scroll").addEventListener("mouseup", function() {
