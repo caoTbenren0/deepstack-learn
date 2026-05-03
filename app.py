@@ -16,7 +16,7 @@ MAX_RECENT_PAGES = 64
 
 
 def load_api_key() -> str | None:
-    """流程A：读取本地配置并提取 API Key。"""
+    """流程名：配置加载流程｜读取本地配置并提取 API Key。"""
     if os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             config = json.load(f)
@@ -1421,12 +1421,12 @@ async function refreshBalance() {
 # Helpers
 # ---------------------------------------------------------------------------
 def get_cache_key(topic: str, is_recursive: bool, vocab_context: str = "") -> str:
-    """流程B：为一次生成请求构建稳定缓存键。"""
+    """流程名：内容缓存键生成流程｜为同一请求参数生成稳定缓存键。"""
     return hashlib.md5(f"{topic}|{is_recursive}|{vocab_context}".encode()).hexdigest()
 
 
 def normalize_records_payload(payload: dict | None) -> dict:
-    """流程C：标准化前端记录数据，保障字段完整且合法。"""
+    """流程名：记录归一化流程｜校验并修正前端状态快照结构。"""
     if not isinstance(payload, dict):
         return {"items": [], "selId": None, "theme": "dark", "nextId": 1}
 
@@ -1449,6 +1449,7 @@ def normalize_records_payload(payload: dict | None) -> dict:
 # ---------------------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
 async def index():
+    """流程名：主页渲染流程｜返回单页应用 HTML 模板。"""
     return HTML_TEMPLATE
 
 
@@ -1563,6 +1564,7 @@ h1 h2 h3 p ul ol li code pre blockquote hr details/summary
         _cache[cache_key] = payload
         return JSONResponse(payload)
 
+    # Step 5/5：异常兜底（格式恢复 / API错误 / 未知错误）
     except json.JSONDecodeError:
         # 步骤 D6（降级）：尝试从包裹文本中抽取 JSON。
         if raw:
@@ -1587,12 +1589,12 @@ h1 h2 h3 p ul ol li code pre blockquote hr details/summary
 
 
 def recursive_level(topic: str) -> int:
-    """流程E：通过括号层数估算递归深度。"""
+    """流程名：递归层级识别流程｜根据括号层级估算递归深度。"""
     return topic.count("（") + topic.count("(")
 
 
 def build_vocab_rule(level: int) -> str:
-    """流程F：按递归层级生成生词约束规则。"""
+    """流程名：词汇约束生成流程｜按递归层级生成生词控制规则。"""
     if level <= 0:
         return "递归层级0：没有对生词的限制。"
     if level == 1:
@@ -1603,14 +1605,14 @@ def build_vocab_rule(level: int) -> str:
 
 
 def gen_title_from_html(html: str) -> str:
-    """流程G：从 HTML 文本提取短标题用于侧边栏展示。"""
+    """流程名：标题摘要流程｜从 HTML 文本中抽取简短标题。"""
     txt = re.sub(r"<[^>]+>", " ", html)
     txt = re.sub(r"\s+", " ", txt).strip()
     return (txt[:18] + "…") if len(txt) > 18 else txt
 
 @app.get("/api/records")
 async def get_records():
-    """流程H：读取并返回学习记录。"""
+    """流程名：学习记录读取流程｜读取并归一化持久化状态。"""
     if not os.path.exists(RECORDS_PATH):
         return JSONResponse({"items": [], "selId": None, "theme": "dark", "nextId": 1})
     with open(RECORDS_PATH, "r", encoding="utf-8") as f:
@@ -1619,7 +1621,7 @@ async def get_records():
 
 @app.put("/api/records")
 async def put_records(req: Request):
-    """流程I：接收并持久化学习记录。"""
+    """流程名：学习记录保存流程｜接收前端状态并写入本地存储。"""
     payload = normalize_records_payload(await req.json())
     with open(RECORDS_PATH, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False)
@@ -1643,7 +1645,8 @@ async def get_balance():
 
 @app.post("/api/topic-clarify")
 async def topic_clarify(req: Request):
-    """流程K：检测主题歧义并给出候选释义。"""
+    """流程名：主题消歧流程｜识别主题歧义并返回候选语境。"""
+    # Step 1/5：请求解析与基础校验
     try:
         body = await req.json()
     except Exception:
@@ -1658,11 +1661,13 @@ async def topic_clarify(req: Request):
         "3) 若无明显歧义返回空数组；4) 所有选项简洁。"
         f"\n主题：{topic}"
     )
+    # Step 4/5：调用模型并解析结构化结果
     try:
         response = client.chat.completions.create(
             model="deepseek-v4-pro",
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
+            extra_body={"thinking": {"type": "enabled"}},
             max_tokens=300,
         )
         raw = response.choices[0].message.content.strip()
