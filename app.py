@@ -4,6 +4,7 @@ import hashlib
 import re
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
+from starlette.requests import ClientDisconnect
 import openai
 import uvicorn
 import requests
@@ -1277,6 +1278,8 @@ async function generateSelected() {
       throw new Error(e.detail || "请求失败 (" + res.status + ")");
     }
     var data = await res.json();
+    var returnType = (Array.isArray(data.options) && data.options.length) ? "question" : (data.htmlContent ? "content" : "unknown");
+    console.log("[generateSelected] return type:", returnType);
     if (Array.isArray(data.options) && data.options.length) {
       item.status = "pending";
       item.clarifyOptions = data.options.slice(0,5);
@@ -1976,19 +1979,36 @@ def parse_json_object_from_text(raw: str) -> dict:
 
 @app.get("/api/records")
 async def get_records():
-    """流程名：学习记录读取流程｜读取并归一化持久化状态。"""
-    if not os.path.exists(RECORDS_PATH):
-        return JSONResponse({"items": [], "selId": None, "theme": "dark", "nextId": 1})
-    with open(RECORDS_PATH, "r", encoding="utf-8") as f:
-        return JSONResponse(normalize_records_payload(json.load(f)))
+    """流程名：学习记录读取流程｜读取并归一化持久化状态（支持 records/recode 两种文件名）。"""
+    candidates = [RECORDS_PATH, "recode.json", "records.json"]
+    for path in candidates:
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return JSONResponse(normalize_records_payload(json.load(f)))
+        except Exception:
+            continue
+    return JSONResponse({"items": [], "selId": None, "theme": "dark", "nextId": 1, "forceInterview": False})
 
 
 @app.put("/api/records")
 async def put_records(req: Request):
     """流程名：学习记录保存流程｜接收前端状态并写入本地存储。"""
-    payload = normalize_records_payload(await req.json())
-    with open(RECORDS_PATH, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False)
+    try:
+        raw_payload = await req.json()
+    except ClientDisconnect:
+        return JSONResponse({"ok": False, "detail": "客户端已断开连接"}, status_code=499)
+    except Exception:
+        return JSONResponse({"ok": False, "detail": "请求体必须是合法JSON"}, status_code=400)
+
+    payload = normalize_records_payload(raw_payload)
+    try:
+        with open(RECORDS_PATH, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+    except Exception as e:
+        return JSONResponse({"ok": False, "detail": f"保存失败: {e}"}, status_code=500)
+
     return JSONResponse({"ok": True})
 
 
